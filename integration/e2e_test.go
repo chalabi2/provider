@@ -90,6 +90,19 @@ type IntegrationTestSuite struct {
 
 	ipMarketplace bool
 
+	// storageMarket wires the suite for AEP-87 volume flows: volume-enabled
+	// genesis params, an in-process storage operator, and a provider bidding
+	// on beta3 volume orders.
+	storageMarket bool
+
+	kubeClient  kubernetes.Interface
+	akashClient akashclient.Interface
+	cliHome     string
+
+	// set only when storageMarket is true
+	storageOperatorHost string
+	grpcHostProvider    string
+
 	addrOracle        sdk.AccAddress
 	oracleMnemonic    string
 	oracleClient      cclient.Client
@@ -131,15 +144,41 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	s.oracleMnemonic = oracleMnemonic
 
 	// Create a network for test
-	cfg := testnet.DefaultConfig(nodetestutil.NewTestNetworkFixture, testnet.WithInterceptState(func(cdc codec.Codec, s string, istate json.RawMessage) json.RawMessage {
+	cfg := testnet.DefaultConfig(nodetestutil.NewTestNetworkFixture, testnet.WithInterceptState(func(cdc codec.Codec, name string, istate json.RawMessage) json.RawMessage {
 		var res json.RawMessage
 
-		switch s {
+		switch name {
 		case "oracle":
 			state := &otypes.GenesisState{}
 			cdc.MustUnmarshalJSON(istate, state)
 			state.Params.Sources = append(state.Params.Sources, oracleAddr.String())
 			res = cdc.MustMarshalJSON(state)
+		case "market":
+			if s.storageMarket {
+				// AEP-87 e2e posture: the volume market ships behind a
+				// governance flag, and the production reclamation floor is
+				// 24h wall clock - both must move for the suite to drive a
+				// full reclaim in test time.
+				state := &mvbeta.GenesisState{}
+				cdc.MustUnmarshalJSON(istate, state)
+				state.Params.VolumeOrdersEnabled = true
+				state.Params.MinReclamationWindow = time.Second
+				state.Params.MinVolumeReclamationWindow = storageReclamationFloor
+				res = cdc.MustMarshalJSON(state)
+			}
+		case "deployment":
+			if s.storageMarket {
+				// tiny deposits make escrow exhaustion reachable in test
+				// time (the money path); the volume lease rate is
+				// 1uact/block under the randomRange strategy.
+				state := &dvbeta.GenesisState{}
+				cdc.MustUnmarshalJSON(istate, state)
+				state.Params.MinDeposits = sdk.Coins{
+					sdk.NewInt64Coin("uakt", 50),
+					sdk.NewInt64Coin(sdkutil.DenomUact, 50),
+				}
+				res = cdc.MustMarshalJSON(state)
+			}
 		}
 
 		return res
@@ -186,9 +225,16 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	s.Require().NoError(err)
 
 	// Send coins value
+	fundMul := int64(4)
+	if s.storageMarket {
+		// the storage suites run more concurrent bids (volume, attach,
+		// adoption, re-attach) and more deployments per test
+		fundMul = 12
+	}
+
 	sendTokens := sdk.Coins{
-		sdk.NewCoin(s.cfg.BondDenom, mvbeta.DefaultBidMinDeposit.Amount.MulRaw(4)),
-		sdk.NewCoin(sdkutil.DenomUact, sdkmath.NewInt(uactMinDepositAmount*4)),
+		sdk.NewCoin(s.cfg.BondDenom, mvbeta.DefaultBidMinDeposit.Amount.MulRaw(fundMul)),
+		sdk.NewCoin(sdkutil.DenomUact, sdkmath.NewInt(uactMinDepositAmount*fundMul)),
 	}
 
 	// Setup a Provider key
@@ -254,6 +300,10 @@ func (s *IntegrationTestSuite) SetupSuite() {
 
 	numPorts := 4
 	if s.ipMarketplace {
+		numPorts += 2
+	}
+	if s.storageMarket {
+		// storage operator REST + provider gateway gRPC (VolumeTransfer)
 		numPorts += 2
 	}
 
@@ -379,6 +429,7 @@ func (s *IntegrationTestSuite) SetupSuite() {
 
 	// Change the akash home directory for CLI to access the test keyring
 	cliHome := strings.Replace(s.cctx.HomeDir, "simd", "simcli", 1)
+	s.cliHome = cliHome
 
 	// A context object to tie the lifetime of the provider & hostname operator to
 	ctx, cancel := context.WithCancel(context.Background())
@@ -398,6 +449,9 @@ func (s *IntegrationTestSuite) SetupSuite() {
 
 	ac, err := akashclient.NewForConfig(kubecfg)
 	require.NoError(s.T(), err)
+
+	s.kubeClient = kc
+	s.akashClient = ac
 
 	startupch := make(chan struct{}, 10)
 	ctx = context.WithValue(ctx, fromctx.CtxKeyKubeConfig, kubecfg)
@@ -436,6 +490,26 @@ func (s *IntegrationTestSuite) SetupSuite() {
 		pArgs = pArgs.
 			WithFlag("ip-operator-endpoint", ipOperatorHost).
 			WithFlag("ip-operator", true)
+	}
+
+	var storageOperatorPort int
+
+	if s.storageMarket {
+		storageOperatorPort = ports[len(ports)-1]
+		s.storageOperatorHost = fmt.Sprintf("localhost:%d", storageOperatorPort)
+		s.grpcHostProvider = fmt.Sprintf("localhost:%d", ports[len(ports)-2])
+
+		pArgs = pArgs.
+			WithFlag("volume-classes", "beta3").
+			WithFlag("volume-max-retention", "48h").
+			WithFlag("storage-operator-endpoint", s.storageOperatorHost).
+			WithFlag(pcmd.FlagGatewayGRPCListenAddress, s.grpcHostProvider).
+			WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
+			// withdrawal is the escrow-exhaustion detector: the floor pair
+			// (1m monitor, 1m withdrawal) keeps the money path inside test
+			// time
+			WithFlag(pcmd.FlagLeaseFundsMonitorInterval, "1m").
+			WithFlag(pcmd.FlagWithdrawalPeriod, "1m")
 	}
 
 	if s.gatewayAPIMode {
@@ -495,6 +569,33 @@ func (s *IntegrationTestSuite) SetupSuite() {
 
 		s.T().Log("waiting for IP operator")
 		waitForTCPSocket(s.ctx, dialer, ipOperatorHost, s.T())
+	}
+
+	if s.storageMarket {
+		// the storage operator must be listening before the provider
+		// starts: volume-market participants gate startup on it
+		storageOperatorArgs := cli.TestFlags().
+			With("storage").
+			WithFlag(operatorcommon.FlagRESTAddress, "127.0.0.1").
+			WithFlag(operatorcommon.FlagRESTPort, storageOperatorPort).
+			WithFlag("node", s.validator.RPCAddress).
+			WithFlag("resync-interval", "5s").
+			WithProvider(s.addrProvider.String())
+
+		s.group.Go(func() error {
+			s.T().Logf("starting storage operator for test on %s", s.storageOperatorHost)
+
+			_, err := ptestutil.RunLocalOperator(
+				s.ctx,
+				cctx,
+				storageOperatorArgs...,
+			)
+			s.Assert().NoError(err)
+			return err
+		})
+
+		s.T().Log("waiting for storage operator")
+		waitForTCPSocket(s.ctx, dialer, s.storageOperatorHost, s.T())
 	}
 
 	s.group.Go(func() error {
@@ -750,13 +851,14 @@ func TestIntegrationTestSuite(t *testing.T) {
 	suite.Run(t, new(E2EDeploymentUpdate))
 	suite.Run(t, new(E2EApp))
 	suite.Run(t, new(E2EPersistentStorageDefault))
-	suite.Run(t, new(E2EPersistentStorageDefault))
 	suite.Run(t, new(E2EPersistentStorageBeta2))
 	suite.Run(t, new(E2EPersistentStorageDeploymentUpdate))
 	suite.Run(t, new(E2EStorageClassRam))
 	suite.Run(t, new(E2EMigrateHostname))
 	suite.Run(t, new(E2ECustomCurrency))
 	suite.Run(t, &E2EIPAddress{IntegrationTestSuite{ipMarketplace: true}})
+	suite.Run(t, &E2EStorageMarket{IntegrationTestSuite{storageMarket: true}})
+	suite.Run(t, &E2EStorageMarketMigration{IntegrationTestSuite: IntegrationTestSuite{storageMarket: true}})
 }
 
 // TestQueryApp enables rapid testing of the querying functionality locally
