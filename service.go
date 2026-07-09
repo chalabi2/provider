@@ -93,6 +93,10 @@ func NewService(ctx context.Context,
 		Attributes:        cfg.Attributes,
 		MaxGroupVolumes:   cfg.MaxGroupVolumes,
 		ReclamationWindow: cfg.ReclamationWindow,
+		Volumes:           cfg.Volumes,
+		// TODO(aep-87): wire the storage operator client as VolumeLookup
+		// when the operator stage lands; nil skips the local CRD
+		// pre-checks and the chain gates remain authoritative.
 	})
 	if err != nil {
 		errmsg := "creating bidengine service"
@@ -101,6 +105,16 @@ func NewService(ctx context.Context,
 		<-clusterSvc.Done()
 		<-bcSvc.lc.Done()
 		return nil, fmt.Errorf("%w: %s", err, errmsg)
+	}
+
+	vpSvc, err := newVolumeProvisioner(ctx, session, bus)
+	if err != nil {
+		session.Log().Error("creating volume provisioner", "err", err)
+		cancel()
+		<-clusterSvc.Done()
+		<-bidengineSvc.Done()
+		<-bcSvc.lc.Done()
+		return nil, err
 	}
 
 	manifestConfig := manifest.ServiceConfig{
@@ -131,6 +145,7 @@ func NewService(ctx context.Context,
 		ctx:       ctx,
 		cancel:    cancel,
 		bc:        bcSvc,
+		vp:        vpSvc,
 		lc:        lifecycle.New(),
 		config:    cfg,
 	}
@@ -153,6 +168,7 @@ type service struct {
 	bidengine bidengine.Service
 	manifest  manifest.Service
 	bc        *balanceChecker
+	vp        *volumeProvisioner
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -266,9 +282,14 @@ func (s *service) run() {
 	<-s.bidengine.Done()
 	<-s.manifest.Done()
 	<-s.bc.lc.Done()
+	<-s.vp.lc.Done()
 
 	if err := s.bc.Close(); err != nil {
 		s.session.Log().Error("balance checker had error", "err", err)
+	}
+
+	if err := s.vp.Close(); err != nil {
+		s.session.Log().Error("volume provisioner had error", "err", err)
 	}
 
 	s.session.Log().Info("shutdown complete")

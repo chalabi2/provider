@@ -186,6 +186,26 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.Flags().StringSlice(FlagVolumeClasses, nil, "storage classes offered as standalone volumes (AEP-87); requires the matching -retain StorageClass installed by the storage operator. empty disables volume bidding")
+	if err := viper.BindPFlag(FlagVolumeClasses, cmd.Flags().Lookup(FlagVolumeClasses)); err != nil {
+		return err
+	}
+
+	cmd.Flags().Uint64(FlagVolumeMaxSize, 0, "largest standalone volume, in bytes, to bid on. 0 means no provider-side cap")
+	if err := viper.BindPFlag(FlagVolumeMaxSize, cmd.Flags().Lookup(FlagVolumeMaxSize)); err != nil {
+		return err
+	}
+
+	cmd.Flags().Duration(FlagVolumeMaxRetention, 0, "longest post-close retention window honored for standalone volumes (e.g. 168h). orders asking for more are declined")
+	if err := viper.BindPFlag(FlagVolumeMaxRetention, cmd.Flags().Lookup(FlagVolumeMaxRetention)); err != nil {
+		return err
+	}
+
+	cmd.Flags().Uint32(FlagVolumeMaxReplicas, 0, "highest volume replica count supported. 0 declines orders with replication terms")
+	if err := viper.BindPFlag(FlagVolumeMaxReplicas, cmd.Flags().Lookup(FlagVolumeMaxReplicas)); err != nil {
+		return err
+	}
+
 	cmd.Flags().Duration(FlagManifestTimeout, 5*time.Minute, "time after which bids are cancelled if no manifest is received")
 	if err := viper.BindPFlag(FlagManifestTimeout, cmd.Flags().Lookup(FlagManifestTimeout)); err != nil {
 		return err
