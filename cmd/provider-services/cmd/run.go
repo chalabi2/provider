@@ -100,6 +100,10 @@ const (
 	FlagVolumeMaxSize                    = "volume-max-size"
 	FlagVolumeMaxRetention               = "volume-max-retention"
 	FlagVolumeMaxReplicas                = "volume-max-replicas"
+	FlagVolumeReplicationDriver          = "volume-replication-driver"
+	FlagVolumeReplicationRookNS          = "volume-replication-rook-namespace"
+	FlagVolumeReplicationDir             = "volume-replication-dir"
+	FlagVolumeReplicaSyncInterval        = "volume-replica-sync-interval"
 	FlagManifestTimeout                  = "manifest-timeout"
 	FlagMetricsListener                  = "metrics-listener"
 	FlagWithdrawalPeriod                 = "withdrawal-period"
@@ -825,7 +829,20 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service)
+	var gwgrpcOpts []gwgrpc.ServerOption
+
+	// the VolumeTransfer data plane is served only by volume-market
+	// participants; everyone else exposes no transfer endpoint
+	if volumesEnabled(config) {
+		transferSrv, err := buildVolumeTransferServer(ctx, cl.Query(), cctx.FromAddress.String(), logger)
+		if err != nil {
+			return err
+		}
+
+		gwgrpcOpts = append(gwgrpcOpts, gwgrpc.WithVolumeTransfer(transferSrv))
+	}
+
+	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service, gwgrpcOpts...)
 	if err != nil {
 		return err
 	}

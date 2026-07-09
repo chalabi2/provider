@@ -206,6 +206,26 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.Flags().String(FlagVolumeReplicationDriver, "stream-export", "volume replication driver: stream-export (default) or rbd-mirror (opt-in, mutually trusting provider pairs only)")
+	if err := viper.BindPFlag(FlagVolumeReplicationDriver, cmd.Flags().Lookup(FlagVolumeReplicationDriver)); err != nil {
+		return err
+	}
+
+	cmd.Flags().String(FlagVolumeReplicationRookNS, "rook-ceph", "namespace of the rook-ceph-tools pod rbd exports are executed in")
+	if err := viper.BindPFlag(FlagVolumeReplicationRookNS, cmd.Flags().Lookup(FlagVolumeReplicationRookNS)); err != nil {
+		return err
+	}
+
+	cmd.Flags().String(FlagVolumeReplicationDir, "", "base directory for the plain-file-copy replication backend (local-path volumes). empty uses the OS temp dir")
+	if err := viper.BindPFlag(FlagVolumeReplicationDir, cmd.Flags().Lookup(FlagVolumeReplicationDir)); err != nil {
+		return err
+	}
+
+	cmd.Flags().Duration(FlagVolumeReplicaSyncInterval, 15*time.Minute, "period between replica volume diff pulls from the primary")
+	if err := viper.BindPFlag(FlagVolumeReplicaSyncInterval, cmd.Flags().Lookup(FlagVolumeReplicaSyncInterval)); err != nil {
+		return err
+	}
+
 	cmd.Flags().Duration(FlagManifestTimeout, 5*time.Minute, "time after which bids are cancelled if no manifest is received")
 	if err := viper.BindPFlag(FlagManifestTimeout, cmd.Flags().Lookup(FlagManifestTimeout)); err != nil {
 		return err
