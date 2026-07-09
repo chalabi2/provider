@@ -68,7 +68,7 @@ type alwaysFailsBidPricingStrategy struct {
 var _ BidPricingStrategy = (*testBidPricingStrategy)(nil)
 var _ BidPricingStrategy = (*alwaysFailsBidPricingStrategy)(nil)
 
-func makeMocks(s *orderTestScaffold) {
+func defaultGroupResult() *dvbeta.QueryGroupResponse {
 	groupResult := &dvbeta.QueryGroupResponse{}
 	groupResult.Group.GroupSpec.Name = "testGroupName"
 	groupResult.Group.GroupSpec.Resources = make(dvbeta.ResourceUnits, 1)
@@ -104,6 +104,10 @@ func makeMocks(s *orderTestScaffold) {
 
 	groupResult.Group.GroupSpec.Resources[0] = resource
 
+	return groupResult
+}
+
+func makeMocks(s *orderTestScaffold, groupResult *dvbeta.QueryGroupResponse) {
 	homeDir, _ := os.MkdirTemp("", "akash-network-test-*")
 
 	queryMocks := &clientmocks.QueryClient{}
@@ -196,7 +200,7 @@ func makeOrderForTestWithLogger(
 	scaffold.groupID = dtypes.MakeGroupID(scaffold.deploymentID, 2)
 	scaffold.orderID = mtypes.MakeOrderID(scaffold.groupID, 1356326)
 
-	makeMocks(&scaffold)
+	makeMocks(&scaffold, defaultGroupResult())
 
 	scaffold.testAddr = testutil.AccAddress(t)
 

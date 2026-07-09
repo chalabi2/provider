@@ -159,7 +159,10 @@ loop:
 			default:
 			}
 		case attr := <-pass.newAttr:
-			// todo fetch current cluster storage inventory
+			// AEP-87: live per-class storage inventory deliberately does not
+			// merge into the advertised attributes; volume orders gate on
+			// the retained cluster snapshot via StorageInventory instead
+			// (see shouldBidVolume).
 			pass.attr = attr
 			pass.pushCurrAttributes()
 		case <-pass.errFetchAttr:
