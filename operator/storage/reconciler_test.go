@@ -375,6 +375,50 @@ func TestGCFrozenWhileExporting(t *testing.T) {
 	testGCFrozenInPhase(t, crd.VolumePhaseExporting)
 }
 
+func TestExportingThawsToRetainedPastDeadline(t *testing.T) {
+	lid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseExporting)
+	vol.Status.PVName = testPV
+	until := metav1.NewTime(time.Now().Add(-time.Hour))
+	vol.Status.RetainedUntil = &until
+
+	pv := testPVObj(vol, testVolNS, vol.Name)
+
+	s := makeScaffold(t, &fakeChain{}, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	// window + retention served: the export freeze thaws to Retained;
+	// the next pass takes the single destruction path
+	uvol, err := s.ac.AkashV2beta2().Volumes(testNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseRetained, uvol.Status.Phase)
+
+	// the PV survived this pass
+	_, err = s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+	require.NoError(t, err)
+}
+
+func TestExportingHoldsBeforeDeadline(t *testing.T) {
+	lid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseExporting)
+	vol.Status.PVName = testPV
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	vol.Status.RetainedUntil = &until
+
+	pv := testPVObj(vol, testVolNS, vol.Name)
+
+	s := makeScaffold(t, &fakeChain{}, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	uvol, err := s.ac.AkashV2beta2().Volumes(testNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseExporting, uvol.Status.Phase)
+}
+
 func testGCFrozenInPhase(t *testing.T, phase crd.VolumePhase) {
 	t.Helper()
 

@@ -33,7 +33,8 @@ type ChainClient interface {
 	ActiveLeases(ctx context.Context) (map[string]bool, error)
 
 	// Events streams the AEP-87 relevant chain events: EventLeaseClosed,
-	// EventVolumeAttached, EventVolumeDetached, EventVolumeAdopted.
+	// EventLeaseReclaimStarted, EventVolumeAttached, EventVolumeDetached,
+	// EventVolumeAdopted.
 	Events(ctx context.Context, name string) (<-chan interface{}, error)
 }
 
@@ -192,8 +193,16 @@ func processEvent(bev abci.Event) (interface{}, bool) {
 		return nil, false
 	}
 
-	switch pev.(type) {
+	switch tev := pev.(type) {
 	case *mv1.EventLeaseClosed:
+	case *mv1.EventLeaseReclaimStarted:
+		// only volume reclamations freeze a CRD into Exporting; compute
+		// reclaims are not this operator's business
+		switch tev.Reason {
+		case mv1.LeaseClosedReasonVolumeEvict, mv1.LeaseClosedReasonVolumeMigrate:
+		default:
+			return nil, false
+		}
 	case *mv1.EventVolumeAttached:
 	case *mv1.EventVolumeDetached:
 	case *dv1.EventVolumeAdopted:
