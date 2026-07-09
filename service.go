@@ -20,6 +20,7 @@ import (
 	"github.com/akash-network/provider/bidengine"
 	"github.com/akash-network/provider/cluster"
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"
+	clfromctx "github.com/akash-network/provider/cluster/types/v1beta3/fromctx"
 	"github.com/akash-network/provider/manifest"
 	"github.com/akash-network/provider/operator/waiter"
 	"github.com/akash-network/provider/session"
@@ -86,7 +87,7 @@ func NewService(ctx context.Context,
 		return nil, err
 	}
 
-	bidengineSvc, err := bidengine.NewService(ctx, cl, session, clusterSvc, bus, waiter, bidengine.Config{
+	bidengineCfg := bidengine.Config{
 		PricingStrategy:   cfg.BidPricingStrategy,
 		Deposit:           cfg.BidDeposit,
 		BidTimeout:        cfg.BidTimeout,
@@ -94,10 +95,16 @@ func NewService(ctx context.Context,
 		MaxGroupVolumes:   cfg.MaxGroupVolumes,
 		ReclamationWindow: cfg.ReclamationWindow,
 		Volumes:           cfg.Volumes,
-		// TODO(aep-87): wire the storage operator client as VolumeLookup
-		// when the operator stage lands; nil skips the local CRD
-		// pre-checks and the chain gates remain authoritative.
-	})
+	}
+
+	// the storage operator client answers the local Volume CRD pre-checks
+	// for adoption and attach bids; absent (non-participating provider) the
+	// pre-checks are skipped and the chain gates remain authoritative
+	if scl := clfromctx.ClientStorageFromContext(ctx); scl != nil {
+		bidengineCfg.VolumeLookup = scl
+	}
+
+	bidengineSvc, err := bidengine.NewService(ctx, cl, session, clusterSvc, bus, waiter, bidengineCfg)
 	if err != nil {
 		errmsg := "creating bidengine service"
 		session.Log().Error(errmsg, "err", err)
