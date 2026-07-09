@@ -1,7 +1,7 @@
 package util
 
 import (
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 )
 

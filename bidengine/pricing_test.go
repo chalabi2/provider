@@ -23,7 +23,7 @@ import (
 	sdkmath "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/node/types/unit"

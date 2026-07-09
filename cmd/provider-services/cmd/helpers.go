@@ -16,9 +16,9 @@ import (
 
 	cflags "pkg.akt.dev/go/cli/flags"
 	discovery "pkg.akt.dev/go/node/client/discovery"
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	apclient "pkg.akt.dev/go/provider/client"
 

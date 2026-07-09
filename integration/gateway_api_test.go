@@ -24,7 +24,7 @@ import (
 	clitestutil "pkg.akt.dev/go/cli/testutil"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	"github.com/akash-network/provider/cluster/kube/builder"
 	providerCmd "github.com/akash-network/provider/cmd/provider-services/cmd"

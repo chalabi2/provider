@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"pkg.akt.dev/go/cli"
 	cflags "pkg.akt.dev/go/cli/flags"
-	"pkg.akt.dev/go/node/client/v1beta3"
+	"pkg.akt.dev/go/node/client/v1beta4"
 )
 
 func statusCmd() *cobra.Command {
@@ -54,7 +54,7 @@ func doStatus(cmd *cobra.Command) error {
 		return err
 	}
 
-	var queryClient v1beta3.QueryClient
+	var queryClient v1beta4.QueryClient
 	if cl != nil {
 		queryClient = cl.Query()
 	}

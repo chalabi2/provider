@@ -3,8 +3,8 @@ package event
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
 

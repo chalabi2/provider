@@ -1,7 +1,7 @@
 package cluster
 
 import (
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 

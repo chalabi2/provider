@@ -20,7 +20,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	atypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"

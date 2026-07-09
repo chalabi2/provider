@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"

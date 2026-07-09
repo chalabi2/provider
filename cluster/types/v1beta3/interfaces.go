@@ -1,7 +1,7 @@
 package v1beta3
 
 import (
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 )
 
 type MGroup interface {

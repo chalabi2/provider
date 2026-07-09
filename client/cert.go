@@ -11,7 +11,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	ctypes "pkg.akt.dev/go/node/cert/v1"
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
 )
 
 type CertificateQuerier struct {

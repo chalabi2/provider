@@ -6,7 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 
 	ktypes "github.com/akash-network/provider/cluster/kube/types/v1beta3"
@@ -295,7 +295,7 @@ func (ms *ManifestService) fromCRD() (mani.Service, error) {
 				Read: ms.Params.Permissions.Read,
 				// NOTE: Write and Delete are stored in ManifestServicePermissions
 				// but cannot be converted to mani.ServicePermissions until the
-				// upstream SDK (pkg.akt.dev/go/manifest/v2beta3) adds support.
+				// upstream SDK (pkg.akt.dev/go/manifest/v2beta4) adds support.
 				// When that happens, uncomment and update the following:
 				// Write:  ms.Params.Permissions.Write,
 				// Delete: ms.Params.Permissions.Delete,
@@ -345,7 +345,7 @@ func manifestServiceFromProvider(ams mani.Service, schedulerParams *SchedulerPar
 			ms.Params.Permissions = &ManifestServicePermissions{
 				Read: ams.Params.Permissions.Read,
 				// NOTE: Write and Delete will be populated here once the upstream
-				// SDK (pkg.akt.dev/go/manifest/v2beta3) adds support for them.
+				// SDK (pkg.akt.dev/go/manifest/v2beta4) adds support for them.
 				// When that happens, uncomment and update the following:
 				// Write:  ams.Params.Permissions.Write,
 				// Delete: ams.Params.Permissions.Delete,

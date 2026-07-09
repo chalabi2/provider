@@ -13,7 +13,7 @@ import (
 
 	"cosmossdk.io/log"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"
 	clusterUtil "github.com/akash-network/provider/cluster/util"

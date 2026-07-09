@@ -12,11 +12,11 @@ import (
 
 	"cosmossdk.io/log"
 
-	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta3"
+	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	"pkg.akt.dev/go/util/pubsub"
 	"pkg.akt.dev/go/util/runner"
 

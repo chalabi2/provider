@@ -1,7 +1,7 @@
 package manifest
 
 import (
-	maniv2beta1 "pkg.akt.dev/go/manifest/v2beta3"
+	maniv2beta1 "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 )
 

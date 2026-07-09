@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	sdkquery "github.com/cosmos/cosmos-sdk/types/query"
-	sclient "pkg.akt.dev/go/node/client/v1beta3"
+	sclient "pkg.akt.dev/go/node/client/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	apclient "pkg.akt.dev/go/provider/client"
 	provider "pkg.akt.dev/go/provider/v1"
 	"pkg.akt.dev/go/util/pubsub"

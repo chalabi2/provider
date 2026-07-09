@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"pkg.akt.dev/go/cli"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	clitestutil "pkg.akt.dev/go/cli/testutil"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"

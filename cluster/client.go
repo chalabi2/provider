@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/tools/remotecommand"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	apclient "pkg.akt.dev/go/provider/client"

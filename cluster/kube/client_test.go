@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/rest"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/testutil"
 
