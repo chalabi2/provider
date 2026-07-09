@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 	kubehostname "github.com/akash-network/provider/cluster/kube/operators/clients/hostname"
 	kubeinventory "github.com/akash-network/provider/cluster/kube/operators/clients/inventory"
 	kubeip "github.com/akash-network/provider/cluster/kube/operators/clients/ip"
+	kubestorage "github.com/akash-network/provider/cluster/kube/operators/clients/storage"
 	cip "github.com/akash-network/provider/cluster/types/v1beta3/clients/ip"
 	clfromctx "github.com/akash-network/provider/cluster/types/v1beta3/fromctx"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
@@ -139,7 +141,13 @@ const (
 const (
 	serviceIPOperator       = "ip-operator"
 	serviceHostnameOperator = "hostname-operator"
+	serviceStorageOperator  = "storage-operator"
 )
+
+// attrStorageVolumes is the capability a provider advertises to take part
+// in the AEP-87 volume market; the SDL injects the same key into volume
+// order placement requirements.
+const attrStorageVolumes = "capabilities/storage/volumes"
 
 var (
 	errInvalidConfig = errors.New("invalid configuration")
@@ -753,6 +761,25 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		ctx = context.WithValue(ctx, clfromctx.CtxKeyClientIP, ipOperatorClient)
 	}
 
+	// The storage operator is mandatory only for volume-market participants:
+	// providers advertising capabilities/storage/volumes (or with volume
+	// classes configured) gate startup on it; everyone else has no
+	// chart-before-daemon ordering constraint.
+	if volumesEnabled(config) {
+		endpoint, err := providerflags.GetServiceEndpointFlagValue(logger, serviceStorageOperator)
+		if err != nil {
+			return err
+		}
+
+		storageOperatorClient, err := kubestorage.NewClient(ctx, logger, endpoint)
+		if err != nil {
+			return err
+		}
+
+		waitClients = append(waitClients, storageOperatorClient)
+		ctx = context.WithValue(ctx, clfromctx.CtxKeyClientStorage, storageOperatorClient)
+	}
+
 	operatorWaiter := waiter.NewOperatorWaiter(ctx, logger, waitClients...)
 
 	service, err := provider.NewService(ctx, cctx, cctx.FromAddress, sessionMgr, bus, cclient, operatorWaiter, config)
@@ -855,6 +882,22 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// volumesEnabled reports whether the provider participates in the AEP-87
+// volume market: either the capability is advertised in its attributes or
+// volume classes are configured for bidding.
+func volumesEnabled(config provider.Config) bool {
+	if len(config.Volumes.Classes) > 0 {
+		return true
+	}
+
+	if val, set := config.Attributes.Find(attrStorageVolumes).AsString(); set {
+		enabled, _ := strconv.ParseBool(val)
+		return enabled
+	}
+
+	return false
 }
 
 func runMigrationsOnStartup(ctx context.Context, cmd *cobra.Command, logger log.Logger) error {

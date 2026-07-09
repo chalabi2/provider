@@ -6,6 +6,7 @@ import (
 	"github.com/akash-network/provider/cluster/types/v1beta3/clients/hostname"
 	"github.com/akash-network/provider/cluster/types/v1beta3/clients/inventory"
 	"github.com/akash-network/provider/cluster/types/v1beta3/clients/ip"
+	"github.com/akash-network/provider/cluster/types/v1beta3/clients/storage"
 )
 
 type CtxKey string
@@ -14,6 +15,7 @@ const (
 	CtxKeyClientIP        = CtxKey("client-ip")
 	CtxKeyClientHostname  = CtxKey("client-hostname")
 	CtxKeyClientInventory = CtxKey("client-inventory")
+	CtxKeyClientStorage   = CtxKey("client-storage")
 )
 
 func ClientIPFromContext(ctx context.Context) ip.Client {
@@ -49,5 +51,17 @@ func ClientInventoryFromContext(ctx context.Context) inventory.Client {
 	}
 
 	res = val.(inventory.Client)
+	return res
+}
+
+func ClientStorageFromContext(ctx context.Context) storage.Client {
+	var res storage.Client
+
+	val := ctx.Value(CtxKeyClientStorage)
+	if val == nil {
+		return res
+	}
+
+	res = val.(storage.Client)
 	return res
 }

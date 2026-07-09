@@ -299,6 +299,10 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	if err := providerflags.AddServiceEndpointFlag(cmd, serviceStorageOperator); err != nil {
+		return err
+	}
+
 	cmd.Flags().Bool(FlagCertIssuerEnabled, false, "enable certificate issuer")
 	if err := viper.BindPFlag(FlagCertIssuerEnabled, cmd.Flags().Lookup(FlagCertIssuerEnabled)); err != nil {
 		return err
