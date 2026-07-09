@@ -17,6 +17,7 @@ import (
 
 	mani "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	apclient "pkg.akt.dev/go/provider/client"
 	mquery "pkg.akt.dev/node/v2/x/market/query"
@@ -65,6 +66,25 @@ type Client interface {
 	Deploy(ctx context.Context, deployment ctypes.IDeployment) error
 	TeardownLease(context.Context, mtypes.LeaseID) error
 	Deployments(context.Context) ([]ctypes.IDeployment, error)
+
+	// DeployVolume records a won AEP-87 volume lease as a Volume CRD. The
+	// storage operator owns the PV choreography; the daemon never touches
+	// PVs directly.
+	DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dvbeta.Group) error
+	// AttachVolume marks the referenced volume attached to a compute lease.
+	AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error
+	// DetachVolume clears a compute lease's attachment from the referenced
+	// volume; the operator re-parks the backing PV.
+	DetachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error
+	// TeardownVolume transitions the volumes of a closed volume lease to
+	// Retained (reclaim retain, retainedUntil stamped) or Releasing
+	// (reclaim delete). Data destruction stays with the operator GC.
+	TeardownVolume(ctx context.Context, lid mtypes.LeaseID) error
+	// VolumeStatus returns the Volume CRD the reference addresses.
+	VolumeStatus(ctx context.Context, ref dtypes.VolumeRef) (*crd.Volume, error)
+	// DeployedVolumes lists the volumes recorded in the cluster - the
+	// restart rebuild source for durable reservations.
+	DeployedVolumes(ctx context.Context) ([]ctypes.VolumeDeployment, error)
 	Exec(ctx context.Context,
 		lID mtypes.LeaseID,
 		service string,
@@ -283,6 +303,33 @@ func (c *nullClient) TeardownLease(_ context.Context, lid mtypes.LeaseID) error 
 }
 
 func (c *nullClient) Deployments(context.Context) ([]ctypes.IDeployment, error) {
+	return nil, nil
+}
+
+func (c *nullClient) DeployVolume(_ context.Context, _ mtypes.LeaseID, _ *dvbeta.Group) error {
+	return errNotImplemented
+}
+
+func (c *nullClient) AttachVolume(_ context.Context, _ mtypes.LeaseID, _ dtypes.VolumeRef) error {
+	return errNotImplemented
+}
+
+func (c *nullClient) DetachVolume(_ context.Context, _ mtypes.LeaseID, _ dtypes.VolumeRef) error {
+	return errNotImplemented
+}
+
+func (c *nullClient) TeardownVolume(_ context.Context, _ mtypes.LeaseID) error {
+	return errNotImplemented
+}
+
+func (c *nullClient) VolumeStatus(_ context.Context, _ dtypes.VolumeRef) (*crd.Volume, error) {
+	return nil, errNotImplemented
+}
+
+// DeployedVolumes reports no volumes rather than erroring: the cluster
+// service rebuilds durable reservations from this at startup and the null
+// client must keep that path working.
+func (c *nullClient) DeployedVolumes(context.Context) ([]ctypes.VolumeDeployment, error) {
 	return nil, nil
 }
 

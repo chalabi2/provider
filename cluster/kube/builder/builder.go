@@ -38,6 +38,12 @@ const (
 	AkashLeaseManifestVersion     = "akash.network/manifest.version"
 	AkashLeaseUpdatedAt           = "akash.network/lease.updated_at"
 	AkashManifestResourceVersion  = "akash.network/manifest.resource.version"
+	// AkashComponentLabelName marks non-workload akash objects by component.
+	// Objects labeled with it are excluded from stale-resource cleanup.
+	AkashComponentLabelName = "akash.network/component"
+	// AkashComponentVolume is the component label value for AEP-87
+	// first-class volume objects (Volume CRDs, holder/attach PVCs, PVs).
+	AkashComponentVolume = "volume"
 )
 
 const (
