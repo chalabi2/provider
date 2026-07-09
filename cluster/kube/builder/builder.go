@@ -46,6 +46,13 @@ const (
 	// workload builder uses it as the matchExpression for a per-group pod
 	// anti-affinity rule that spreads peers across distinct nodes.
 	AkashInterconnectGroupLabelName = "akash.network/interconnect-group"
+
+	// AkashComponentLabelName marks non-workload akash objects by component.
+	// Objects labeled with it are excluded from stale-resource cleanup.
+	AkashComponentLabelName = "akash.network/component"
+	// AkashComponentVolume is the component label value for AEP-87
+	// first-class volume objects (Volume CRDs, holder/attach PVCs, PVs).
+	AkashComponentVolume = "volume"
 )
 
 const (

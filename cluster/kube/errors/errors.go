@@ -20,6 +20,9 @@ var (
 	ErrNotConfiguredWithSettings = fmt.Errorf("%w: not configured with settings in the context passed to function", errKubeClient)
 	ErrAlreadyExists             = fmt.Errorf("%w: resource already exists", errKubeClient)
 	ErrNoRoCERailNetworks        = fmt.Errorf("%w: no RoCE rail NetworkAttachmentDefinitions found", errKubeClient)
+	ErrVolumeNotFound            = fmt.Errorf("%w: volume not found", errKubeClient)
+	ErrVolumeMismatch            = fmt.Errorf("%w: volume exists with different identity", errKubeClient)
+	ErrVolumeAttached            = fmt.Errorf("%w: volume is attached to another lease", errKubeClient)
 )
 
 // IsKubeAPIUnreachable reports whether err indicates the kube API server is unreachable.
