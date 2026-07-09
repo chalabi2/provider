@@ -9,6 +9,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	mapi "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
@@ -23,6 +24,22 @@ import (
 // daemon records desired state, the storage operator owns the PV
 // choreography (provision/park/bind) and the GC. The daemon never touches
 // PersistentVolumes directly.
+
+// serviceHasVolumeRefs reports whether a manifest service attaches AEP-87
+// first-class volumes - the third case of Deploy's persistent switch.
+func serviceHasVolumeRefs(service *mapi.Service) bool {
+	if service.Params == nil {
+		return false
+	}
+
+	for _, params := range service.Params.Storage {
+		if params.Volume != "" {
+			return true
+		}
+	}
+
+	return false
+}
 
 func volumeLabels(lid mtypes.LeaseID) map[string]string {
 	labels := map[string]string{

@@ -37,7 +37,14 @@ func cleanupStaleResources(ctx context.Context, kc kubernetes.Interface, lid mty
 		return err
 	}
 
-	selector := labels.NewSelector().Add(*req1).Add(*req2).Add(*req3).String()
+	// AEP-87 volume objects (attach PVCs, operator-created resources) are
+	// not manifest services; they must never match the stale selector.
+	req4, err := labels.NewRequirement(builder.AkashComponentLabelName, selection.NotIn, []string{builder.AkashComponentVolume})
+	if err != nil {
+		return err
+	}
+
+	selector := labels.NewSelector().Add(*req1).Add(*req2).Add(*req3).Add(*req4).String()
 
 	// delete stale deployments
 	if err := kc.AppsV1().Deployments(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
