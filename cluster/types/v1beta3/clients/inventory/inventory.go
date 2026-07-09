@@ -90,7 +90,9 @@ func NewNull(ctx context.Context, nodes ...string) NullClient {
 				VolumesAttached:  inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 				VolumesMounted:   inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 			},
-			Capabilities: inventoryV1.NodeCapabilities{},
+			Capabilities: inventoryV1.NodeCapabilities{
+				StorageClasses: []string{"beta2"},
+			},
 		}
 
 		cluster.Nodes = append(cluster.Nodes, nd)
@@ -113,7 +115,9 @@ func NewNull(ctx context.Context, nodes ...string) NullClient {
 				VolumesAttached:  inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 				VolumesMounted:   inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 			},
-			Capabilities: inventoryV1.NodeCapabilities{},
+			Capabilities: inventoryV1.NodeCapabilities{
+				StorageClasses: []string{"beta2"},
+			},
 		})
 	}
 

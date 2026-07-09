@@ -122,7 +122,16 @@ func NewService(
 		return nil, err
 	}
 
-	inventory, err := newInventoryService(ctx, cfg, log, sub, client, waiter, deployments)
+	// AEP-87: durable (volume) reservations are rebuilt from Volume CRDs,
+	// not from Manifest CRDs - a volume lease has no manifest.
+	volumes, err := client.DeployedVolumes(ctx)
+	if err != nil {
+		log.Error("fetching deployed volumes", "err", err)
+		sub.Close()
+		return nil, err
+	}
+
+	inventory, err := newInventoryService(ctx, cfg, log, sub, client, waiter, deployments, volumes)
 	if err != nil {
 		sub.Close()
 		return nil, err
@@ -470,7 +479,13 @@ func (s *service) teardownLease(lid mtypes.LeaseID) {
 	if lid.Provider == s.session.Provider().Owner {
 		s.log.Info("unreserving unmanaged order", "lease", lid)
 		err := s.inventory.unreserve(lid.OrderID())
-		if err != nil && !errors.Is(errReservationNotFound, err) {
+		switch {
+		case errors.Is(err, errReservationDurable):
+			// AEP-87 volume lease close: the durable reservation stays -
+			// the provider holds the bytes through retention/adoption and
+			// releases the capacity only on volume GC.
+			s.log.Info("durable volume reservation retained through lease close", "lease", lid)
+		case err != nil && !errors.Is(errReservationNotFound, err):
 			s.log.Error("unreserve failed", "lease", lid, "err", err)
 		}
 	}
