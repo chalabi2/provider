@@ -8,14 +8,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	"github.com/boz/go-lifecycle"
 
 	"cosmossdk.io/log"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
 	"pkg.akt.dev/go/util/pubsub"
 	"pkg.akt.dev/node/v2/util/runner"
 

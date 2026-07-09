@@ -18,7 +18,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
 
-	akashmanifest "pkg.akt.dev/go/manifest/v2beta3"
+	akashmanifest "pkg.akt.dev/go/manifest/v2beta4"
 	qmock "pkg.akt.dev/go/mocks/node/client"
 	certmocks "pkg.akt.dev/go/mocks/node/client/cert"
 	providermocks "pkg.akt.dev/go/mocks/node/client/provider"

@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/fake"
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/sdl"
 	"pkg.akt.dev/go/testutil"

@@ -17,10 +17,10 @@ import (
 	clientmocks "pkg.akt.dev/go/mocks/node/client"
 	deploymentmocks "pkg.akt.dev/go/mocks/node/client/deployment"
 	marketmocks "pkg.akt.dev/go/mocks/node/client/market"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	"pkg.akt.dev/go/testutil"
 	"pkg.akt.dev/go/util/pubsub"
 

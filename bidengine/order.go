@@ -15,10 +15,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	atypes "pkg.akt.dev/go/node/audit/v1"
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 	metricsutils "pkg.akt.dev/go/util/metrics"
 	"pkg.akt.dev/go/util/pubsub"

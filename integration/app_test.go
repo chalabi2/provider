@@ -13,8 +13,8 @@ import (
 	"pkg.akt.dev/go/cli"
 	clitestutil "pkg.akt.dev/go/cli/testutil"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	"pkg.akt.dev/go/sdl"
 
 	providerCmd "github.com/akash-network/provider/cmd/provider-services/cmd"

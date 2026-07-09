@@ -8,7 +8,7 @@ import (
 	"cosmossdk.io/log"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 
 	"github.com/akash-network/provider/cluster"
 	clusterutil "github.com/akash-network/provider/cluster/util"

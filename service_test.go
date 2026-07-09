@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	manifesttypes "pkg.akt.dev/go/manifest/v2beta3"
+	manifesttypes "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	apclient "pkg.akt.dev/go/provider/client"
 	providerv1 "pkg.akt.dev/go/provider/v1"

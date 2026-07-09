@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	manitypes "pkg.akt.dev/go/manifest/v2beta3"
+	manitypes "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
 

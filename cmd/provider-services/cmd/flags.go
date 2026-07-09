@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	sdkmath "cosmossdk.io/math"
 

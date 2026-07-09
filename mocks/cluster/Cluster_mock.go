@@ -7,7 +7,7 @@ package cluster
 import (
 	"github.com/akash-network/provider/cluster/types/v1beta3"
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/node/deployment/v1beta4"
+	"pkg.akt.dev/go/node/deployment/v1beta5"
 	"pkg.akt.dev/go/node/market/v1"
 )
 
@@ -39,7 +39,7 @@ func (_m *Cluster) EXPECT() *Cluster_Expecter {
 }
 
 // Reserve provides a mock function for the type Cluster
-func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error) {
+func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error) {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
@@ -48,17 +48,17 @@ func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta4.Resource
 
 	var r0 v1beta3.Reservation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) (v1beta3.Reservation, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) (v1beta3.Reservation, error)); ok {
 		return returnFunc(orderID, resourceGroup)
 	}
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) v1beta3.Reservation); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) v1beta3.Reservation); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(v1beta3.Reservation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
 		r1 = returnFunc(orderID, resourceGroup)
 	} else {
 		r1 = ret.Error(1)
@@ -73,20 +73,20 @@ type Cluster_Reserve_Call struct {
 
 // Reserve is a helper method to define mock.On call
 //   - orderID v1.OrderID
-//   - resourceGroup v1beta4.ResourceGroup
+//   - resourceGroup v1beta5.ResourceGroup
 func (_e *Cluster_Expecter) Reserve(orderID interface{}, resourceGroup interface{}) *Cluster_Reserve_Call {
 	return &Cluster_Reserve_Call{Call: _e.mock.On("Reserve", orderID, resourceGroup)}
 }
 
-func (_c *Cluster_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup)) *Cluster_Reserve_Call {
+func (_c *Cluster_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Cluster_Reserve_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 v1.OrderID
 		if args[0] != nil {
 			arg0 = args[0].(v1.OrderID)
 		}
-		var arg1 v1beta4.ResourceGroup
+		var arg1 v1beta5.ResourceGroup
 		if args[1] != nil {
-			arg1 = args[1].(v1beta4.ResourceGroup)
+			arg1 = args[1].(v1beta5.ResourceGroup)
 		}
 		run(
 			arg0,
@@ -101,7 +101,7 @@ func (_c *Cluster_Reserve_Call) Return(reservation v1beta3.Reservation, err erro
 	return _c
 }
 
-func (_c *Cluster_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error)) *Cluster_Reserve_Call {
+func (_c *Cluster_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error)) *Cluster_Reserve_Call {
 	_c.Call.Return(run)
 	return _c
 }

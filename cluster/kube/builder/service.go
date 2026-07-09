@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	manitypes "pkg.akt.dev/go/manifest/v2beta3"
+	manitypes "pkg.akt.dev/go/manifest/v2beta4"
 )
 
 type Service interface {

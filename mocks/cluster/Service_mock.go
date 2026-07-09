@@ -11,7 +11,7 @@ import (
 	"github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	"github.com/cosmos/cosmos-sdk/types"
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/node/deployment/v1beta4"
+	"pkg.akt.dev/go/node/deployment/v1beta5"
 	"pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/provider/client"
 	v10 "pkg.akt.dev/go/provider/v1"
@@ -317,7 +317,7 @@ func (_c *Service_Ready_Call) RunAndReturn(run func() <-chan struct{}) *Service_
 }
 
 // Reserve provides a mock function for the type Service
-func (_mock *Service) Reserve(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error) {
+func (_mock *Service) Reserve(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error) {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
@@ -326,17 +326,17 @@ func (_mock *Service) Reserve(orderID v1.OrderID, resourceGroup v1beta4.Resource
 
 	var r0 v1beta3.Reservation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) (v1beta3.Reservation, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) (v1beta3.Reservation, error)); ok {
 		return returnFunc(orderID, resourceGroup)
 	}
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) v1beta3.Reservation); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) v1beta3.Reservation); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(v1beta3.Reservation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
 		r1 = returnFunc(orderID, resourceGroup)
 	} else {
 		r1 = ret.Error(1)
@@ -351,20 +351,20 @@ type Service_Reserve_Call struct {
 
 // Reserve is a helper method to define mock.On call
 //   - orderID v1.OrderID
-//   - resourceGroup v1beta4.ResourceGroup
+//   - resourceGroup v1beta5.ResourceGroup
 func (_e *Service_Expecter) Reserve(orderID interface{}, resourceGroup interface{}) *Service_Reserve_Call {
 	return &Service_Reserve_Call{Call: _e.mock.On("Reserve", orderID, resourceGroup)}
 }
 
-func (_c *Service_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup)) *Service_Reserve_Call {
+func (_c *Service_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Service_Reserve_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 v1.OrderID
 		if args[0] != nil {
 			arg0 = args[0].(v1.OrderID)
 		}
-		var arg1 v1beta4.ResourceGroup
+		var arg1 v1beta5.ResourceGroup
 		if args[1] != nil {
-			arg1 = args[1].(v1beta4.ResourceGroup)
+			arg1 = args[1].(v1beta5.ResourceGroup)
 		}
 		run(
 			arg0,
@@ -379,7 +379,7 @@ func (_c *Service_Reserve_Call) Return(reservation v1beta3.Reservation, err erro
 	return _c
 }
 
-func (_c *Service_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error)) *Service_Reserve_Call {
+func (_c *Service_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error)) *Service_Reserve_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -13,7 +13,7 @@ import (
 	"pkg.akt.dev/go/cli"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	apclient "pkg.akt.dev/go/provider/client"
 
 	clitestutil "pkg.akt.dev/go/cli/testutil"

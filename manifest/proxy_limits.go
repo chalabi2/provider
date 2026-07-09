@@ -3,7 +3,7 @@ package manifest
 import (
 	"fmt"
 
-	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta3"
+	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta4"
 )
 
 // Upper bounds on tenant-supplied nginx proxy buffer options. These render into the

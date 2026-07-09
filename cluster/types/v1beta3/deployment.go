@@ -1,7 +1,7 @@
 package v1beta3
 
 import (
-	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta3"
+	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
 

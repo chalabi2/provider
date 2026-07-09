@@ -25,7 +25,7 @@ import (
 	"cosmossdk.io/log"
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 
 	"github.com/akash-network/provider/cluster/kube/builder"
 	kubeclienterrors "github.com/akash-network/provider/cluster/kube/errors"

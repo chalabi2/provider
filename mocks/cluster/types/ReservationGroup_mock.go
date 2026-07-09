@@ -6,7 +6,7 @@ package v1beta3
 
 import (
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/node/deployment/v1beta4"
+	"pkg.akt.dev/go/node/deployment/v1beta5"
 )
 
 // NewReservationGroup creates a new instance of ReservationGroup. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
@@ -83,19 +83,19 @@ func (_c *ReservationGroup_ClusterParams_Call) RunAndReturn(run func() interface
 }
 
 // GetAllocatedResources provides a mock function for the type ReservationGroup
-func (_mock *ReservationGroup) GetAllocatedResources() v1beta4.ResourceUnits {
+func (_mock *ReservationGroup) GetAllocatedResources() v1beta5.ResourceUnits {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAllocatedResources")
 	}
 
-	var r0 v1beta4.ResourceUnits
-	if returnFunc, ok := ret.Get(0).(func() v1beta4.ResourceUnits); ok {
+	var r0 v1beta5.ResourceUnits
+	if returnFunc, ok := ret.Get(0).(func() v1beta5.ResourceUnits); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(v1beta4.ResourceUnits)
+			r0 = ret.Get(0).(v1beta5.ResourceUnits)
 		}
 	}
 	return r0
@@ -118,30 +118,30 @@ func (_c *ReservationGroup_GetAllocatedResources_Call) Run(run func()) *Reservat
 	return _c
 }
 
-func (_c *ReservationGroup_GetAllocatedResources_Call) Return(resourceUnits v1beta4.ResourceUnits) *ReservationGroup_GetAllocatedResources_Call {
+func (_c *ReservationGroup_GetAllocatedResources_Call) Return(resourceUnits v1beta5.ResourceUnits) *ReservationGroup_GetAllocatedResources_Call {
 	_c.Call.Return(resourceUnits)
 	return _c
 }
 
-func (_c *ReservationGroup_GetAllocatedResources_Call) RunAndReturn(run func() v1beta4.ResourceUnits) *ReservationGroup_GetAllocatedResources_Call {
+func (_c *ReservationGroup_GetAllocatedResources_Call) RunAndReturn(run func() v1beta5.ResourceUnits) *ReservationGroup_GetAllocatedResources_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Resources provides a mock function for the type ReservationGroup
-func (_mock *ReservationGroup) Resources() v1beta4.ResourceGroup {
+func (_mock *ReservationGroup) Resources() v1beta5.ResourceGroup {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for Resources")
 	}
 
-	var r0 v1beta4.ResourceGroup
-	if returnFunc, ok := ret.Get(0).(func() v1beta4.ResourceGroup); ok {
+	var r0 v1beta5.ResourceGroup
+	if returnFunc, ok := ret.Get(0).(func() v1beta5.ResourceGroup); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(v1beta4.ResourceGroup)
+			r0 = ret.Get(0).(v1beta5.ResourceGroup)
 		}
 	}
 	return r0
@@ -164,18 +164,18 @@ func (_c *ReservationGroup_Resources_Call) Run(run func()) *ReservationGroup_Res
 	return _c
 }
 
-func (_c *ReservationGroup_Resources_Call) Return(resourceGroup v1beta4.ResourceGroup) *ReservationGroup_Resources_Call {
+func (_c *ReservationGroup_Resources_Call) Return(resourceGroup v1beta5.ResourceGroup) *ReservationGroup_Resources_Call {
 	_c.Call.Return(resourceGroup)
 	return _c
 }
 
-func (_c *ReservationGroup_Resources_Call) RunAndReturn(run func() v1beta4.ResourceGroup) *ReservationGroup_Resources_Call {
+func (_c *ReservationGroup_Resources_Call) RunAndReturn(run func() v1beta5.ResourceGroup) *ReservationGroup_Resources_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // SetAllocatedResources provides a mock function for the type ReservationGroup
-func (_mock *ReservationGroup) SetAllocatedResources(resourceUnits v1beta4.ResourceUnits) {
+func (_mock *ReservationGroup) SetAllocatedResources(resourceUnits v1beta5.ResourceUnits) {
 	_mock.Called(resourceUnits)
 	return
 }
@@ -186,16 +186,16 @@ type ReservationGroup_SetAllocatedResources_Call struct {
 }
 
 // SetAllocatedResources is a helper method to define mock.On call
-//   - resourceUnits v1beta4.ResourceUnits
+//   - resourceUnits v1beta5.ResourceUnits
 func (_e *ReservationGroup_Expecter) SetAllocatedResources(resourceUnits interface{}) *ReservationGroup_SetAllocatedResources_Call {
 	return &ReservationGroup_SetAllocatedResources_Call{Call: _e.mock.On("SetAllocatedResources", resourceUnits)}
 }
 
-func (_c *ReservationGroup_SetAllocatedResources_Call) Run(run func(resourceUnits v1beta4.ResourceUnits)) *ReservationGroup_SetAllocatedResources_Call {
+func (_c *ReservationGroup_SetAllocatedResources_Call) Run(run func(resourceUnits v1beta5.ResourceUnits)) *ReservationGroup_SetAllocatedResources_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 v1beta4.ResourceUnits
+		var arg0 v1beta5.ResourceUnits
 		if args[0] != nil {
-			arg0 = args[0].(v1beta4.ResourceUnits)
+			arg0 = args[0].(v1beta5.ResourceUnits)
 		}
 		run(
 			arg0,
@@ -209,7 +209,7 @@ func (_c *ReservationGroup_SetAllocatedResources_Call) Return() *ReservationGrou
 	return _c
 }
 
-func (_c *ReservationGroup_SetAllocatedResources_Call) RunAndReturn(run func(resourceUnits v1beta4.ResourceUnits)) *ReservationGroup_SetAllocatedResources_Call {
+func (_c *ReservationGroup_SetAllocatedResources_Call) RunAndReturn(run func(resourceUnits v1beta5.ResourceUnits)) *ReservationGroup_SetAllocatedResources_Call {
 	_c.Run(run)
 	return _c
 }

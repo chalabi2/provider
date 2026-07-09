@@ -3,7 +3,7 @@ package session
 import (
 	"cosmossdk.io/log"
 
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 )
 

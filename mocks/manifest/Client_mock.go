@@ -8,7 +8,7 @@ import (
 	"context"
 
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/manifest/v2beta3"
+	"pkg.akt.dev/go/manifest/v2beta4"
 	"pkg.akt.dev/go/node/deployment/v1"
 )
 
@@ -106,7 +106,7 @@ func (_c *Client_IsActive_Call) RunAndReturn(run func(context1 context.Context, 
 }
 
 // Submit provides a mock function for the type Client
-func (_mock *Client) Submit(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta3.Manifest) error {
+func (_mock *Client) Submit(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta4.Manifest) error {
 	ret := _mock.Called(context1, deploymentID, manifest)
 
 	if len(ret) == 0 {
@@ -114,7 +114,7 @@ func (_mock *Client) Submit(context1 context.Context, deploymentID v1.Deployment
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.DeploymentID, v2beta3.Manifest) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.DeploymentID, v2beta4.Manifest) error); ok {
 		r0 = returnFunc(context1, deploymentID, manifest)
 	} else {
 		r0 = ret.Error(0)
@@ -130,12 +130,12 @@ type Client_Submit_Call struct {
 // Submit is a helper method to define mock.On call
 //   - context1 context.Context
 //   - deploymentID v1.DeploymentID
-//   - manifest v2beta3.Manifest
+//   - manifest v2beta4.Manifest
 func (_e *Client_Expecter) Submit(context1 interface{}, deploymentID interface{}, manifest interface{}) *Client_Submit_Call {
 	return &Client_Submit_Call{Call: _e.mock.On("Submit", context1, deploymentID, manifest)}
 }
 
-func (_c *Client_Submit_Call) Run(run func(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta3.Manifest)) *Client_Submit_Call {
+func (_c *Client_Submit_Call) Run(run func(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta4.Manifest)) *Client_Submit_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -145,9 +145,9 @@ func (_c *Client_Submit_Call) Run(run func(context1 context.Context, deploymentI
 		if args[1] != nil {
 			arg1 = args[1].(v1.DeploymentID)
 		}
-		var arg2 v2beta3.Manifest
+		var arg2 v2beta4.Manifest
 		if args[2] != nil {
-			arg2 = args[2].(v2beta3.Manifest)
+			arg2 = args[2].(v2beta4.Manifest)
 		}
 		run(
 			arg0,
@@ -163,7 +163,7 @@ func (_c *Client_Submit_Call) Return(err error) *Client_Submit_Call {
 	return _c
 }
 
-func (_c *Client_Submit_Call) RunAndReturn(run func(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta3.Manifest) error) *Client_Submit_Call {
+func (_c *Client_Submit_Call) RunAndReturn(run func(context1 context.Context, deploymentID v1.DeploymentID, manifest v2beta4.Manifest) error) *Client_Submit_Call {
 	_c.Call.Return(run)
 	return _c
 }

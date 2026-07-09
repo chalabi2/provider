@@ -5,7 +5,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	mtypes "pkg.akt.dev/go/node/market/v1beta5"
+	mtypes "pkg.akt.dev/go/node/market/v2beta1"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	"pkg.akt.dev/go/node/types/constants"
 

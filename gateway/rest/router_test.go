@@ -23,7 +23,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
-	manifestValidation "pkg.akt.dev/go/manifest/v2beta3"
+	manifestValidation "pkg.akt.dev/go/manifest/v2beta4"
 	qmock "pkg.akt.dev/go/mocks/node/client"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
@@ -481,7 +481,7 @@ func TestRoutePutManifestOK(t *testing.T) {
 				Owner: caddr.String(),
 				DSeq:  dseq,
 			},
-			mock.AnythingOfType("v2beta3.Manifest"),
+			mock.AnythingOfType("v2beta4.Manifest"),
 		).Return(nil)
 
 		uri, err := apclient.MakeURI(test.host, apclient.SubmitManifestPath(dseq))
@@ -533,7 +533,7 @@ func TestRoutePutManifest_errors_return_correct_status(t *testing.T) {
 				test.pmclient.On("Submit",
 					mock.Anything,
 					dtypes.DeploymentID{Owner: caddr.String(), DSeq: dseq},
-					mock.AnythingOfType("v2beta3.Manifest"),
+					mock.AnythingOfType("v2beta4.Manifest"),
 				).Return(wrappedErr)
 
 				uri, err := apclient.MakeURI(test.host, apclient.SubmitManifestPath(dseq))
