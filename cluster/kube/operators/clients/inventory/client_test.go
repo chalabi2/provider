@@ -81,6 +81,10 @@ func (r *testReservation) Allocated() bool {
 	return false
 }
 
+func (r *testReservation) Kind() ctypes.ReservationKind {
+	return ctypes.ReservationKindLease
+}
+
 func (r *testReservation) SetClusterParams(val interface{}) {
 	r.cparams = val
 }

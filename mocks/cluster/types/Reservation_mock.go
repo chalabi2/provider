@@ -5,6 +5,7 @@
 package v1beta3
 
 import (
+	"github.com/akash-network/provider/cluster/types/v1beta3"
 	mock "github.com/stretchr/testify/mock"
 	"pkg.akt.dev/go/node/deployment/v1beta5"
 	"pkg.akt.dev/go/node/market/v1"
@@ -169,6 +170,50 @@ func (_c *Reservation_GetAllocatedResources_Call) Return(resourceUnits v1beta5.R
 }
 
 func (_c *Reservation_GetAllocatedResources_Call) RunAndReturn(run func() v1beta5.ResourceUnits) *Reservation_GetAllocatedResources_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Kind provides a mock function for the type Reservation
+func (_mock *Reservation) Kind() v1beta3.ReservationKind {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for Kind")
+	}
+
+	var r0 v1beta3.ReservationKind
+	if returnFunc, ok := ret.Get(0).(func() v1beta3.ReservationKind); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(v1beta3.ReservationKind)
+	}
+	return r0
+}
+
+// Reservation_Kind_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Kind'
+type Reservation_Kind_Call struct {
+	*mock.Call
+}
+
+// Kind is a helper method to define mock.On call
+func (_e *Reservation_Expecter) Kind() *Reservation_Kind_Call {
+	return &Reservation_Kind_Call{Call: _e.mock.On("Kind")}
+}
+
+func (_c *Reservation_Kind_Call) Run(run func()) *Reservation_Kind_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Reservation_Kind_Call) Return(reservationKind v1beta3.ReservationKind) *Reservation_Kind_Call {
+	_c.Call.Return(reservationKind)
+	return _c
+}
+
+func (_c *Reservation_Kind_Call) RunAndReturn(run func() v1beta3.ReservationKind) *Reservation_Kind_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -142,7 +142,8 @@ func TestInventory_ClusterDeploymentNotDeployed(t *testing.T) {
 		subscriber,
 		clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		deployments)
+		deployments,
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 
@@ -240,7 +241,8 @@ func TestInventory_ClusterDeploymentDeployed(t *testing.T) {
 		subscriber,
 		clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		deployments)
+		deployments,
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 
@@ -562,7 +564,8 @@ func TestInventory_ReserveIPNoIPOperator(t *testing.T) {
 		subscriber,
 		scaffold.clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		make([]ctypes.IDeployment, 0))
+		make([]ctypes.IDeployment, 0),
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 
@@ -617,7 +620,8 @@ func TestInventory_ReserveIPUnavailableWithIPOperator(t *testing.T) {
 		subscriber,
 		scaffold.clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		make([]ctypes.IDeployment, 0))
+		make([]ctypes.IDeployment, 0),
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 
@@ -692,7 +696,8 @@ func TestInventory_ReserveIPAvailableWithIPOperator(t *testing.T) {
 		subscriber,
 		scaffold.clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		make([]ctypes.IDeployment, 0))
+		make([]ctypes.IDeployment, 0),
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 
@@ -808,7 +813,8 @@ func TestInventory_OverReservations(t *testing.T) {
 		subscriber,
 		scaffold.clusterClient,
 		waiter.NewNullWaiter(), // Do not need to wait in test
-		make([]ctypes.IDeployment, 0))
+		make([]ctypes.IDeployment, 0),
+		nil)
 	require.NoError(t, err)
 	require.NotNil(t, inv)
 

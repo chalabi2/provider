@@ -107,7 +107,7 @@ func NewService(ctx context.Context,
 		return nil, fmt.Errorf("%w: %s", err, errmsg)
 	}
 
-	vpSvc, err := newVolumeProvisioner(ctx, session, bus)
+	vpSvc, err := newVolumeProvisioner(ctx, session, bus, cclient)
 	if err != nil {
 		session.Log().Error("creating volume provisioner", "err", err)
 		cancel()
