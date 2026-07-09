@@ -107,6 +107,10 @@ const (
 	FlagReclamationWindow                = "reclamation-window"
 	FlagReclamationRPCTimeout            = "reclamation-rpc-timeout"
 	FlagReclamationCloseRetryInterval    = "reclamation-close-retry-interval"
+	FlagVolumeClasses                    = "volume-classes"
+	FlagVolumeMaxSize                    = "volume-max-size"
+	FlagVolumeMaxRetention               = "volume-max-retention"
+	FlagVolumeMaxReplicas                = "volume-max-replicas"
 	FlagManifestTimeout                  = "manifest-timeout"
 	FlagMetricsListener                  = "metrics-listener"
 	FlagWithdrawalPeriod                 = "withdrawal-period"
@@ -688,6 +692,13 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	}
 	if reclamationCloseRetryInterval > 0 {
 		config.ReclamationCloseRetryInterval = reclamationCloseRetryInterval
+	}
+
+	config.Volumes = bidengine.VolumeConfig{
+		Classes:      viper.GetStringSlice(FlagVolumeClasses),
+		MaxSize:      viper.GetUint64(FlagVolumeMaxSize),
+		MaxRetention: viper.GetDuration(FlagVolumeMaxRetention),
+		MaxReplicas:  viper.GetUint32(FlagVolumeMaxReplicas),
 	}
 	config.MonitorMaxRetries = monitorMaxRetries
 	config.MonitorRetryPeriod = monitorRetryPeriod
