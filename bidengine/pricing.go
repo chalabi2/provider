@@ -328,6 +328,16 @@ var (
 type storageElement struct {
 	Class string `json:"class"`
 	Size  uint64 `json:"size"`
+
+	// AEP-87 volume terms, set only for storage-only (volume) groups.
+	// Volume marks the entry as a standalone volume; RetentionHours is the
+	// post-close retention window the provider must honor; MaxReplicas is
+	// the export duty priced into the primary lease; Replica marks the
+	// volume as a replica of another volume (replica_of set).
+	Volume         bool   `json:"volume,omitempty"`
+	RetentionHours uint64 `json:"retention_hours,omitempty"`
+	MaxReplicas    uint32 `json:"max_replicas,omitempty"`
+	Replica        bool   `json:"replica,omitempty"`
 }
 
 type gpuVendorAttributes struct {

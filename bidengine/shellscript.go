@@ -215,6 +215,17 @@ func newDataForScript(r Request) dataForScript {
 		storageQuantity := parseStorage(group.Storage)
 		endpointQuantity := len(group.Endpoints)
 
+		// AEP-87: a storage-only (volume) group prices its volume terms —
+		// retention, replication duty — alongside class and size
+		if vol := r.GSpec.Volume; vol != nil {
+			for j := range storageQuantity {
+				storageQuantity[j].Volume = true
+				storageQuantity[j].RetentionHours = uint64(vol.Retention / time.Hour)
+				storageQuantity[j].MaxReplicas = vol.MaxReplicas
+				storageQuantity[j].Replica = vol.ReplicaOf != nil
+			}
+		}
+
 		d.Resources[i] = dataForScriptElement{
 			CPU:              cpuQuantity,
 			GPU:              gpuQuantity,
