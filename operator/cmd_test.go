@@ -158,7 +158,7 @@ func TestOperatorPreRunEErrorCancelsGroup(t *testing.T) {
 
 func TestOperatorSubcommandsRegistered(t *testing.T) {
 	op := OperatorsCmd()
-	for _, name := range []string{"inventory", "ip", "hostname"} {
+	for _, name := range []string{"inventory", "ip", "hostname", "storage"} {
 		c, _, err := op.Find([]string{name})
 		require.NoError(t, err)
 		require.Equal(t, name, c.Name())
