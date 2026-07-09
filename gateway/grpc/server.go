@@ -22,6 +22,7 @@ import (
 	leasev1 "pkg.akt.dev/go/provider/lease/v1"
 	providerv1 "pkg.akt.dev/go/provider/v1"
 	ajwt "pkg.akt.dev/go/util/jwt"
+	vtv1 "pkg.akt.dev/go/volume/v1"
 
 	"github.com/akash-network/provider"
 	gwutils "github.com/akash-network/provider/gateway/utils"
@@ -59,7 +60,29 @@ func ClaimsFromCtx(ctx context.Context) *ajwt.Claims {
 	return val.(*ajwt.Claims)
 }
 
-func NewServer(ctx context.Context, endpoint string, cquery gwutils.CertGetter, client provider.Client) error {
+// ServerOption extends the gateway gRPC server with optional services.
+type ServerOption func(*serverOptions)
+
+type serverOptions struct {
+	volumeTransfer vtv1.VolumeTransferServer
+}
+
+// WithVolumeTransfer registers the AEP-87 VolumeTransfer data plane on
+// the gateway (mTLS with x/cert provider identities; the service derives
+// authorization from chain state). Nil is ignored - providers not in the
+// volume market serve no transfer endpoint.
+func WithVolumeTransfer(srv vtv1.VolumeTransferServer) ServerOption {
+	return func(opts *serverOptions) {
+		opts.volumeTransfer = srv
+	}
+}
+
+func NewServer(ctx context.Context, endpoint string, cquery gwutils.CertGetter, client provider.Client, opts ...ServerOption) error {
+	options := &serverOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	tlsCfg, err := gwutils.NewServerTLSConfig(ctx, cquery, endpoint)
 	if err != nil {
 		return err
@@ -88,6 +111,10 @@ func NewServer(ctx context.Context, endpoint string, cquery gwutils.CertGetter, 
 		cclient: client.Cluster(),
 	}
 	leasev1.RegisterLeaseRPCServer(grpcSrv, leaseRPC)
+
+	if options.volumeTransfer != nil {
+		vtv1.RegisterVolumeTransferServer(grpcSrv, options.volumeTransfer)
+	}
 
 	gogoreflection.Register(grpcSrv)
 
