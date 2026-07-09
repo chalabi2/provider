@@ -17,3 +17,31 @@ metadata:
 provisioner: rancher.io/local-path
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
+---
+# beta3 is the sellable class AEP-87 volume orders are priced and
+# inventoried against in e2e clusters (the fake-Ceph stance: local-path
+# stands in for RBD).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: beta3
+  labels:
+    akash.network: "true"
+provisioner: rancher.io/local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+# beta3-retain is the Retain-policy twin the storage operator provisions
+# first-class volumes against (every PV backing a volume group is created
+# reclaimPolicy: Retain at provision time). Binding is Immediate: parked
+# holder PVCs never have a consuming pod, so WaitForFirstConsumer would
+# never bind them.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: beta3-retain
+  labels:
+    akash.network: "true"
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
