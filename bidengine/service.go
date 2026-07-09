@@ -79,20 +79,21 @@ func NewService(
 	group, _ := errgroup.WithContext(ctx)
 
 	s := &service{
-		session:  session,
-		cluster:  cluster,
-		bus:      bus,
-		sub:      sub,
-		statusch: make(chan chan<- *apclient.BidEngineStatus),
-		orders:   make(map[string]*order),
-		drainch:  make(chan *order),
-		ordersch: make(chan []mtypes.OrderID, 1000),
-		group:    group,
-		cancel:   cancel,
-		lc:       lifecycle.New(),
-		cfg:      cfg,
-		pass:     providerAttrService,
-		waiter:   waiter,
+		session:    session,
+		cluster:    cluster,
+		bus:        bus,
+		sub:        sub,
+		statusch:   make(chan chan<- *apclient.BidEngineStatus),
+		orders:     make(map[string]*order),
+		drainch:    make(chan *order),
+		ordersch:   make(chan []mtypes.OrderID, 1000),
+		group:      group,
+		cancel:     cancel,
+		lc:         lifecycle.New(),
+		cfg:        cfg,
+		pass:       providerAttrService,
+		waiter:     waiter,
+		storageInv: newStorageInventory(),
 	}
 
 	go s.lc.WatchContext(pctx)
@@ -138,6 +139,10 @@ type service struct {
 
 	// waiter coordinates operator startup dependencies.
 	waiter waiter.OperatorWaiter
+
+	// storageInv retains live per-class storage headroom for volume orders,
+	// fed from the retained inventory-status topic.
+	storageInv *storageInventory
 }
 
 func (s *service) Close() error {
@@ -260,6 +265,11 @@ func (s *service) run(ctx context.Context) {
 
 	bus := fromctx.MustPubSubFromCtx(ctx)
 
+	// live per-class storage headroom for volume orders rides the retained
+	// inventory-status topic (see storageInventory)
+	inventorych := bus.Sub(ptypes.PubSubTopicInventoryStatus)
+	defer bus.Unsub(inventorych)
+
 	signalch := make(chan struct{}, 1)
 	trySignal := func() {
 		select {
@@ -313,6 +323,10 @@ loop:
 				ordersCounter.WithLabelValues("start").Inc()
 				s.orders[key] = order
 				trySignal()
+			}
+		case update := <-inventorych:
+			if inv, valid := update.(*provider.Inventory); valid {
+				s.storageInv.update(inv)
 			}
 		case ch := <-s.statusch:
 			ch <- &apclient.BidEngineStatus{

@@ -15,6 +15,16 @@ type LeaseWon struct {
 	Price   sdk.DecCoin
 }
 
+// VolumeLeaseWon is published when a lease on a storage-only (volume) group
+// is won (AEP-87). A volume lease has no manifest — the on-chain GroupSpec is
+// the whole contract — so it is handed to the volume provisioner rather than
+// the manifest machinery.
+type VolumeLeaseWon struct {
+	LeaseID mtypes.LeaseID
+	Group   *dtypes.Group
+	Price   sdk.DecCoin
+}
+
 // ManifestReceived stores leaseID, manifest received, deployment and group details
 // to be provisioned by the Provider.
 type ManifestReceived struct {
