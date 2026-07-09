@@ -20,6 +20,7 @@ import (
 	"github.com/akash-network/provider/operator/hostname"
 	"github.com/akash-network/provider/operator/inventory"
 	"github.com/akash-network/provider/operator/ip"
+	"github.com/akash-network/provider/operator/storage"
 	akashclientset "github.com/akash-network/provider/pkg/client/clientset/versioned"
 	"github.com/akash-network/provider/tools/fromctx"
 )
@@ -114,6 +115,7 @@ func OperatorsCmd() *cobra.Command {
 	cmd.AddCommand(inventory.Cmd())
 	cmd.AddCommand(ip.Cmd())
 	cmd.AddCommand(hostname.Cmd())
+	cmd.AddCommand(storage.Cmd())
 
 	return cmd
 }
