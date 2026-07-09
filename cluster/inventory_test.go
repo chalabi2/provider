@@ -14,6 +14,7 @@ import (
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
 	manifest "pkg.akt.dev/go/manifest/v2beta4"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
@@ -880,4 +881,85 @@ func TestPlacementRequirementsPreserved(t *testing.T) {
 	t.Run("unknown type stays permissive", func(t *testing.T) {
 		require.Empty(t, placementRequirements(nil).Attributes)
 	})
+}
+
+// TestInventory_ResourcesToCommitVolumeGroup asserts the AEP-87 carve-out:
+// a storage-only (volume) group is never commit-level adjusted. The chain
+// requires the bid offer to EQUAL the order's storage quantity, and
+// ComputeCommittedResources would clamp the zero compute legs to one under
+// overcommit, so the group must pass through untouched.
+func TestInventory_ResourcesToCommitVolumeGroup(t *testing.T) {
+	is := &inventoryService{
+		config: Config{
+			CPUCommitLevel:     2.0,
+			GPUCommitLevel:     2.0,
+			MemoryCommitLevel:  2.0,
+			StorageCommitLevel: 2.0,
+		},
+	}
+
+	gspec := dvbeta.GroupSpec{
+		Name: "volume-group",
+		Resources: dvbeta.ResourceUnits{
+			{
+				Resources: rtypes.Resources{
+					ID:     1,
+					CPU:    &rtypes.CPU{Units: rtypes.NewResourceValue(0)},
+					GPU:    &rtypes.GPU{Units: rtypes.NewResourceValue(0)},
+					Memory: &rtypes.Memory{Quantity: rtypes.NewResourceValue(0)},
+					Storage: rtypes.Volumes{
+						rtypes.Storage{
+							Name:     "data",
+							Quantity: rtypes.NewResourceValue(10 * unit.Gi),
+							Attributes: attrtypes.Attributes{
+								{Key: "class", Value: "beta2"},
+								{Key: "persistent", Value: "true"},
+							},
+						},
+					},
+				},
+				Count: 1,
+			},
+		},
+		Volume: &dv1.VolumePolicy{
+			Vid:            "pgdata",
+			Reclaim:        dv1.VolumeReclaimRetain,
+			MaxAttachments: 1,
+		},
+	}
+
+	committed := is.resourcesToCommit(gspec)
+	require.Equal(t, gspec, committed)
+
+	units := committed.GetResourceUnits()
+	require.Len(t, units, 1)
+	require.Equal(t, uint64(0), units[0].CPU.Units.Value())
+	require.Equal(t, uint64(10*unit.Gi), units[0].Storage[0].Quantity.Value())
+
+	// contrast: a compute group with the same commit levels is adjusted
+	computeSpec := dvbeta.GroupSpec{
+		Name: "compute-group",
+		Resources: dvbeta.ResourceUnits{
+			{
+				Resources: rtypes.Resources{
+					ID:     1,
+					CPU:    &rtypes.CPU{Units: rtypes.NewResourceValue(1000)},
+					GPU:    &rtypes.GPU{Units: rtypes.NewResourceValue(0)},
+					Memory: &rtypes.Memory{Quantity: rtypes.NewResourceValue(unit.Gi)},
+					Storage: rtypes.Volumes{
+						rtypes.Storage{
+							Quantity: rtypes.NewResourceValue(10 * unit.Gi),
+						},
+					},
+				},
+				Count: 1,
+			},
+		},
+	}
+
+	committedCompute := is.resourcesToCommit(computeSpec)
+	computeUnits := committedCompute.GetResourceUnits()
+	require.Len(t, computeUnits, 1)
+	require.Equal(t, uint64(500), computeUnits[0].CPU.Units.Value())
+	require.Equal(t, uint64(5*unit.Gi), computeUnits[0].Storage[0].Quantity.Value())
 }
