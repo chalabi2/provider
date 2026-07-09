@@ -63,6 +63,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Akash().V2beta2().ProviderHosts().Informer()}, nil
 	case v2beta2.SchemeGroupVersion.WithResource("providerleasedips"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Akash().V2beta2().ProviderLeasedIPs().Informer()}, nil
+	case v2beta2.SchemeGroupVersion.WithResource("volumes"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Akash().V2beta2().Volumes().Informer()}, nil
 
 	}
 

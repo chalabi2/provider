@@ -34,6 +34,8 @@ type Interface interface {
 	ProviderHosts() ProviderHostInformer
 	// ProviderLeasedIPs returns a ProviderLeasedIPInformer.
 	ProviderLeasedIPs() ProviderLeasedIPInformer
+	// Volumes returns a VolumeInformer.
+	Volumes() VolumeInformer
 }
 
 type version struct {
@@ -70,4 +72,9 @@ func (v *version) ProviderHosts() ProviderHostInformer {
 // ProviderLeasedIPs returns a ProviderLeasedIPInformer.
 func (v *version) ProviderLeasedIPs() ProviderLeasedIPInformer {
 	return &providerLeasedIPInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// Volumes returns a VolumeInformer.
+func (v *version) Volumes() VolumeInformer {
+	return &volumeInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

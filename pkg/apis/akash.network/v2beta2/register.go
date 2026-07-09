@@ -40,6 +40,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ProviderLeasedIP{},
 		&ProviderLeasedIPList{})
 
+	scheme.AddKnownTypes(SchemeGroupVersion,
+		&Volume{},
+		&VolumeList{})
+
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }
