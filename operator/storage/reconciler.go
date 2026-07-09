@@ -73,7 +73,15 @@ func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 
 	switch vol.Status.Phase {
 	case crd.VolumePhaseExporting:
-		// migration export in flight: GC frozen, PV untouched
+		// migration export in flight: GC frozen, PV untouched. Once the
+		// lease has closed (retention stamped) and the deadline passed,
+		// the export duty is over: thaw to Retained, and the next pass
+		// takes the single destruction path.
+		if vol.Status.RetainedUntil != nil && r.now().After(vol.Status.RetainedUntil.Time) {
+			vol.Status.Phase = crd.VolumePhaseRetained
+			return r.updateStatus(ctx, vol)
+		}
+
 		return nil
 	case crd.VolumePhaseReleasing:
 		// destruction stamped but deadline not reached (defensive; the

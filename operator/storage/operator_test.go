@@ -117,7 +117,7 @@ func TestApplyLeaseClosedDetachesComputeLease(t *testing.T) {
 
 func TestApplyLeaseClosedIgnoresFrozenPhases(t *testing.T) {
 	lid := testutil.LeaseID(t)
-	vol := testVolume(t, lid, crd.VolumePhaseExporting)
+	vol := testVolume(t, lid, crd.VolumePhaseAdopting)
 	vol.Status.PVName = testPV
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
@@ -125,8 +125,78 @@ func TestApplyLeaseClosedIgnoresFrozenPhases(t *testing.T) {
 	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
 
 	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseAdopting, uvol.Status.Phase)
+	require.Nil(t, uvol.Status.RetainedUntil)
+}
+
+func TestApplyLeaseClosedExportingStampsRetention(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseExporting)
+	vol.Status.PVName = testPV
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+
+	// the retention clock starts (source holds through window + retention)
+	// but the phase stays Exporting: GC remains frozen while the
+	// destination pulls the final diff
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseExporting, uvol.Status.Phase)
+	require.NotNil(t, uvol.Status.RetainedUntil)
+	require.WithinDuration(t, time.Now().Add(168*time.Hour), uvol.Status.RetainedUntil.Time, time.Minute)
+}
+
+func TestApplyReclaimStartedFreezesExporting(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventLeaseReclaimStarted{
+		ID:     lid,
+		Reason: mv1.LeaseClosedReasonVolumeEvict,
+	}))
+
+	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, crd.VolumePhaseExporting, uvol.Status.Phase)
 	require.Nil(t, uvol.Status.RetainedUntil)
+}
+
+func TestApplyReclaimStartedIgnoresOtherLeases(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	otherLid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventLeaseReclaimStarted{
+		ID:     otherLid,
+		Reason: mv1.LeaseClosedReasonVolumeMigrate,
+	}))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
+}
+
+func TestResyncChainStampsExportingRetention(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseExporting)
+	vol.Status.PVName = testPV
+
+	// the volume lease closed while the operator was down
+	chain := &fakeChainClient{active: map[string]bool{}}
+
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseExporting, uvol.Status.Phase)
+	require.NotNil(t, uvol.Status.RetainedUntil)
 }
 
 func TestApplyAttachDetachEvents(t *testing.T) {
