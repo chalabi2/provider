@@ -96,6 +96,19 @@ loop:
 				}); err != nil {
 					vp.log.Error("failed to publish to event queue", "err", err)
 				}
+
+				// register the lease with the balance checker. Compute
+				// leases get this from their deployment manager; a volume
+				// lease has no manifest and no manager, and withdrawal is
+				// the escrow-exhaustion detector - without it an unfunded
+				// volume is never detected and never cascades to
+				// volume_unfunded/retention.
+				if err := vp.bus.Publish(event.LeaseAddFundsMonitor{
+					LeaseID:    ev.LeaseID,
+					IsNewLease: true,
+				}); err != nil {
+					vp.log.Error("failed to publish to event queue", "err", err)
+				}
 			}
 		}
 	}
