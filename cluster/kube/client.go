@@ -575,9 +575,16 @@ func (c *client) Deploy(ctx context.Context, deployment ctypes.IDeployment) (err
 			}
 		}
 
-		if persistent {
+		switch {
+		case serviceHasVolumeRefs(service):
+			// AEP-87 attach: the service mounts a first-class volume via a
+			// pre-bound PVC, so it renders as a Deployment (StatefulSet
+			// VolumeClaimTemplates' positional per-replica claims don't
+			// apply) with replicas forced to 1 in the workload builder.
+			svc.deployment = builder.NewDeployment(workload)
+		case persistent:
 			svc.statefulSet = builder.BuildStatefulSet(workload)
-		} else {
+		default:
 			svc.deployment = builder.NewDeployment(workload)
 		}
 

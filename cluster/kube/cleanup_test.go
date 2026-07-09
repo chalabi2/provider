@@ -295,3 +295,61 @@ func TestCleanupStaleResourcesIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, roleBindings.Items, 0)
 }
+
+// TestCleanupStaleResourcesExcludesVolumeComponent pins the AEP-87
+// invariant that objects labeled akash.network/component=volume never match
+// the stale-resource selector, even when they don't correspond to any
+// manifest service.
+func TestCleanupStaleResourcesExcludesVolumeComponent(t *testing.T) {
+	ctx := context.Background()
+	lid := testutil.LeaseID(t)
+	ns := builder.LidNS(lid)
+
+	staleLabels := map[string]string{
+		builder.AkashManagedLabelName:         "true",
+		builder.AkashManifestServiceLabelName: "old-service",
+		builder.AkashServiceTarget:            "true",
+	}
+	builder.AppendLeaseLabels(lid, staleLabels)
+
+	volumeLabels := map[string]string{
+		builder.AkashManagedLabelName:         "true",
+		builder.AkashManifestServiceLabelName: "old-service",
+		builder.AkashServiceTarget:            "true",
+		builder.AkashComponentLabelName:       builder.AkashComponentVolume,
+	}
+	builder.AppendLeaseLabels(lid, volumeLabels)
+
+	staleService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "old-service",
+			Namespace: ns,
+			Labels:    staleLabels,
+		},
+	}
+
+	volumeService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "volume-service",
+			Namespace: ns,
+			Labels:    volumeLabels,
+		},
+	}
+
+	kc := fake.NewClientset(staleService, volumeService)
+
+	group := &mani.Group{
+		Name: "test-group",
+		Services: mani.Services{
+			{Name: "active-service"},
+		},
+	}
+
+	err := cleanupStaleResources(ctx, kc, lid, group, nil)
+	require.NoError(t, err)
+
+	services, err := kc.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, services.Items, 1)
+	require.Equal(t, "volume-service", services.Items[0].Name)
+}

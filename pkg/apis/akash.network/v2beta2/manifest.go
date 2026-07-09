@@ -83,6 +83,10 @@ type ManifestStorageParams struct {
 	Name     string `json:"name"     yaml:"name"`
 	Mount    string `json:"mount"    yaml:"mount"`
 	ReadOnly bool   `json:"readOnly" yaml:"readOnly"`
+	// Volume mirrors the on-chain VolumeRef as "owner/dseq/gseq/name" for
+	// AEP-87 first-class volume attachments; empty for locally-provisioned
+	// (per-lease) storage.
+	Volume string `json:"volume,omitempty" yaml:"volume,omitempty"`
 }
 
 type ManifestServicePermissions struct {
@@ -287,6 +291,7 @@ func (ms *ManifestService) fromCRD() (mani.Service, error) {
 				Name:     storage.Name,
 				Mount:    storage.Mount,
 				ReadOnly: storage.ReadOnly,
+				Volume:   storage.Volume,
 			})
 		}
 
@@ -338,6 +343,7 @@ func manifestServiceFromProvider(ams mani.Service, schedulerParams *SchedulerPar
 				Name:     storage.Name,
 				Mount:    storage.Mount,
 				ReadOnly: storage.ReadOnly,
+				Volume:   storage.Volume,
 			})
 		}
 
