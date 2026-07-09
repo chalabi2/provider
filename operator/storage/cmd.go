@@ -111,6 +111,15 @@ func Cmd() *cobra.Command {
 		panic(err)
 	}
 
+	// the chain node powering event subscription and adoption verification.
+	// Registered locally (not only on the provider-services root) so the
+	// operator command works standalone - the e2e harness runs it without
+	// the root command's persistent flags.
+	cmd.Flags().String(cflags.FlagNode, "http://localhost:26657", "chain node RPC endpoint; unreachable runs chain-degraded (no adoptions, no event stream)")
+	if err := viper.BindPFlag(cflags.FlagNode, cmd.Flags().Lookup(cflags.FlagNode)); err != nil {
+		panic(err)
+	}
+
 	return cmd
 }
 
