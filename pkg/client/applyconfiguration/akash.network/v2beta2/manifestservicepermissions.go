@@ -21,7 +21,9 @@ package v2beta2
 // ManifestServicePermissionsApplyConfiguration represents a declarative configuration of the ManifestServicePermissions type for use
 // with apply.
 type ManifestServicePermissionsApplyConfiguration struct {
-	Read []string `json:"read,omitempty"`
+	Read   []string `json:"read,omitempty"`
+	Write  []string `json:"write,omitempty"`
+	Delete []string `json:"delete,omitempty"`
 }
 
 // ManifestServicePermissionsApplyConfiguration constructs a declarative configuration of the ManifestServicePermissions type for use with
@@ -36,6 +38,26 @@ func ManifestServicePermissions() *ManifestServicePermissionsApplyConfiguration 
 func (b *ManifestServicePermissionsApplyConfiguration) WithRead(values ...string) *ManifestServicePermissionsApplyConfiguration {
 	for i := range values {
 		b.Read = append(b.Read, values[i])
+	}
+	return b
+}
+
+// WithWrite adds the given value to the Write field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Write field.
+func (b *ManifestServicePermissionsApplyConfiguration) WithWrite(values ...string) *ManifestServicePermissionsApplyConfiguration {
+	for i := range values {
+		b.Write = append(b.Write, values[i])
+	}
+	return b
+}
+
+// WithDelete adds the given value to the Delete field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Delete field.
+func (b *ManifestServicePermissionsApplyConfiguration) WithDelete(values ...string) *ManifestServicePermissionsApplyConfiguration {
+	for i := range values {
+		b.Delete = append(b.Delete, values[i])
 	}
 	return b
 }

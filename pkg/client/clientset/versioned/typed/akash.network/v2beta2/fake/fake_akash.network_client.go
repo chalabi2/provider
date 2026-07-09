@@ -48,6 +48,10 @@ func (c *FakeAkashV2beta2) ProviderLeasedIPs(namespace string) v2beta2.ProviderL
 	return newFakeProviderLeasedIPs(c, namespace)
 }
 
+func (c *FakeAkashV2beta2) Volumes(namespace string) v2beta2.VolumeInterface {
+	return newFakeVolumes(c, namespace)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeAkashV2beta2) RESTClient() rest.Interface {

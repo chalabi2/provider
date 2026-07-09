@@ -49,3 +49,11 @@ type ProviderLeasedIPListerExpansion interface{}
 // ProviderLeasedIPNamespaceListerExpansion allows custom methods to be added to
 // ProviderLeasedIPNamespaceLister.
 type ProviderLeasedIPNamespaceListerExpansion interface{}
+
+// VolumeListerExpansion allows custom methods to be added to
+// VolumeLister.
+type VolumeListerExpansion interface{}
+
+// VolumeNamespaceListerExpansion allows custom methods to be added to
+// VolumeNamespaceLister.
+type VolumeNamespaceListerExpansion interface{}

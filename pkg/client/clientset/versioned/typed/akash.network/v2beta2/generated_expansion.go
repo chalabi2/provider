@@ -27,3 +27,5 @@ type ManifestExpansion interface{}
 type ProviderHostExpansion interface{}
 
 type ProviderLeasedIPExpansion interface{}
+
+type VolumeExpansion interface{}
