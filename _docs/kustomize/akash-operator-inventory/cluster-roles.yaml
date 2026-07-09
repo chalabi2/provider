@@ -90,6 +90,17 @@ rules:
       - get
       - list
       - watch
+  # AEP-87: the volumes scraper overlays first-class volume allocations
+  # onto the merged cluster state so parked/retained volumes are never
+  # double-counted as free.
+  - apiGroups:
+      - akash.network
+    resources:
+      - volumes
+    verbs:
+      - get
+      - list
+      - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

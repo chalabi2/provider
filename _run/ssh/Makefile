@@ -8,7 +8,8 @@ KUBE_DOCKER_IMAGE_ARCH := amd64
 KUSTOMIZE_INSTALLS ?= \
 	akash-operator-hostname \
 	akash-operator-inventory \
-	akash-operator-ip
+	akash-operator-ip \
+	akash-operator-storage
 
 SDL_PATH ?= gpu.yaml
 

@@ -25,7 +25,9 @@ test-e2e-integration:
 	# ```
 	# KUSTOMIZE_INSTALLS=akash-operator-inventory make kube-cluster-setup-e2e
 	# ```
-	$(KIND_VARS) $(INTEGRATION_VARS) $(GO_TEST) -count=1 -p 4 -tags "e2e" -v ./integration/... -run TestIntegrationTestSuite -timeout 3000s
+	# 5400s: the AEP-87 storage-market suites wait out real reclamation
+	# windows and an escrow runway on top of the existing suites
+	$(KIND_VARS) $(INTEGRATION_VARS) $(GO_TEST) -count=1 -p 4 -tags "e2e" -v ./integration/... -run TestIntegrationTestSuite -timeout 5400s
 
 .PHONY: test-e2e-integration-k8s
 test-e2e-integration-k8s:

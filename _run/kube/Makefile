@@ -17,7 +17,8 @@ endif
 KUSTOMIZE_INSTALLS ?= \
 	akash-operator-hostname \
 	akash-operator-inventory \
-	akash-operator-ip
+	akash-operator-ip \
+	akash-operator-storage
 
 ifeq ($(CONFIDENTIAL_COMPUTE),true)
 KUSTOMIZE_INSTALLS += confidential-compute

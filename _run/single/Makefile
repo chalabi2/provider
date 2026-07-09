@@ -2,7 +2,8 @@ KUSTOMIZE_INSTALLS ?= \
 	akash-node \
 	akash-provider \
 	akash-operator-hostname \
-	akash-operator-inventory
+	akash-operator-inventory \
+	akash-operator-storage
 
 KUBE_UPLOAD_AKASH_IMAGE := true
 
