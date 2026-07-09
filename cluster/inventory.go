@@ -20,6 +20,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	atypes "pkg.akt.dev/go/node/types/attributes/v1"
@@ -277,7 +278,38 @@ func (is *inventoryService) statusV1(ctx context.Context) (*provider.Inventory, 
 	}
 }
 
+// groupVolumePolicy extracts the AEP-87 volume policy when the resource
+// group is a storage-only (volume) group; nil for compute groups and shapes
+// that carry no GroupSpec.
+func groupVolumePolicy(rgroup dtypes.ResourceGroup) *dv1.VolumePolicy {
+	switch group := rgroup.(type) {
+	case *dtypes.Group:
+		return group.GroupSpec.Volume
+	case dtypes.Group:
+		return group.GroupSpec.Volume
+	case *dtypes.GroupSpec:
+		return group.Volume
+	case dtypes.GroupSpec:
+		return group.Volume
+	default:
+		return nil
+	}
+}
+
 func (is *inventoryService) resourcesToCommit(rgroup dtypes.ResourceGroup) dtypes.ResourceGroup {
+	// AEP-87: a volume group's bid offer must EQUAL the order's storage
+	// quantity (the chain rejects anything else) and its zero compute legs
+	// must stay zero (ComputeCommittedResources clamps zero to one under
+	// overcommit), so commit levels do not apply — durable leased bytes are
+	// never thin-sold.
+	// TODO(aep-87): flag the resulting reservation as durable
+	// (StorageCommitLevel pinned to 1.0, exempt from
+	// unreserve-on-lease-close, rebuilt from Volume CRDs) when the durable
+	// reservation kind lands with the cluster stage.
+	if groupVolumePolicy(rgroup) != nil {
+		return rgroup
+	}
+
 	replacedResources := make(dtypes.ResourceUnits, 0)
 
 	for _, resource := range rgroup.GetResourceUnits() {
