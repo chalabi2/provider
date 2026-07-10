@@ -847,7 +847,11 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli", bus)
+	// the subscriber id must be unique per daemon instance: co-resident
+	// providers sharing one RPC client (the integration harness's local
+	// client, or any embedded node) otherwise contend for one event-bus
+	// subscription and the loser goes silently deaf
+	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli-"+cctx.FromAddress.String(), bus)
 	if err != nil {
 		return err
 	}
