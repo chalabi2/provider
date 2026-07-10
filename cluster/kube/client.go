@@ -1099,14 +1099,24 @@ func (c *client) ServiceStatus(ctx context.Context, lid mtypes.LeaseID, name str
 		return nil, kubeclienterrors.ErrNoServiceForLease
 	}
 
+	// Mirrors Deploy's workload-type switch: a mounted persistent class
+	// renders as a StatefulSet, EXCEPT when the mount is an AEP-87 volume
+	// ref (params.Volume set) - those attach a pre-bound PVC and render as
+	// a Deployment, so status/exec must look the workload up there too.
 	isDeployment := true
 	if params := svc.Params; params != nil {
+		hasVolumeRef := false
+		hasMount := false
 		for _, param := range params.Storage {
-			if param.Mount != "" {
-				isDeployment = false
+			if param.Volume != "" {
+				hasVolumeRef = true
 				break
 			}
+			if param.Mount != "" {
+				hasMount = true
+			}
 		}
+		isDeployment = hasVolumeRef || !hasMount
 	}
 
 	if isDeployment {
