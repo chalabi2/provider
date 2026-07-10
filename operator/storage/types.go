@@ -15,6 +15,11 @@ const (
 	// FlagResyncInterval is the period of the full CRD re-reconcile sweep.
 	FlagResyncInterval = "resync-interval"
 
+	// FlagProvisionNodeHint annotates provisioning claims with
+	// volume.kubernetes.io/selected-node for node-constrained provisioners
+	// (local-path); leave off for network-attached storage (Ceph RBD).
+	FlagProvisionNodeHint = "provision-node-hint"
+
 	defaultVolumesNS = "akash-volumes"
 )
 

@@ -59,7 +59,7 @@ type storageOperator struct {
 	flagState  common.PrepareFlagFn
 }
 
-func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string, cfg common.OperatorConfig, chain ChainClient, resync time.Duration) (*storageOperator, error) {
+func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string, cfg common.OperatorConfig, chain ChainClient, resync time.Duration, nodeHint bool) (*storageOperator, error) {
 	kc, err := fromctx.KubeClientFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -88,6 +88,8 @@ func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string
 		chain:      chain,
 		resync:     resync,
 	}
+
+	op.reconciler.nodeHint = nodeHint
 
 	op.flagState = op.server.AddPreparedEndpoint("/state", op.prepareState)
 

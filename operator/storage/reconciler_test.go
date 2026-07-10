@@ -188,6 +188,51 @@ func TestReconcileProvisionCreatesHolderPVC(t *testing.T) {
 	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
 }
 
+func TestReconcileProvisionNodeHint(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+
+	classLabel := builder.AkashServiceCapabilityStorage + ".class.beta3"
+	nodes := []runtime.Object{
+		// unschedulable: skipped even though labeled
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{classLabel: "1"}},
+			Spec:       corev1.NodeSpec{Unschedulable: true},
+			Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}},
+		},
+		// ready + labeled: the deterministic pick (first by name)
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{classLabel: "1"}},
+			Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-c", Labels: map[string]string{classLabel: "1"}},
+			Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}},
+		},
+	}
+
+	s := makeScaffold(t, nil, nodes, []runtime.Object{vol})
+	s.r.nodeHint = true
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	pvc, err := s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "node-b", pvc.Annotations[pvcSelectedNodeAnnotation])
+}
+
+func TestReconcileProvisionNodeHintNoNodes(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+
+	s := makeScaffold(t, nil, nil, []runtime.Object{vol})
+	s.r.nodeHint = true
+
+	// no labeled node: provisioning errors instead of parking a claim the
+	// provisioner can never satisfy
+	require.ErrorIs(t, s.r.reconcile(context.Background(), vol), ErrVolumeOperator)
+}
+
 func TestReconcileProvisionPinsBoundPV(t *testing.T) {
 	lid := testutil.LeaseID(t)
 	vol := testVolume(t, lid, crd.VolumePhasePending)
