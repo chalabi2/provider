@@ -34,6 +34,7 @@ func Cmd() *cobra.Command {
 			ns := viper.GetString(providerflags.FlagK8sManifestNS)
 			volNS := viper.GetString(FlagVolumesNS)
 			resync := viper.GetDuration(FlagResyncInterval)
+			nodeHint := viper.GetBool(FlagProvisionNodeHint)
 
 			logger := ctxlog.LogcFromCtx(ctx).With("module", "operator-storage")
 
@@ -61,7 +62,7 @@ func Cmd() *cobra.Command {
 
 			group := fromctx.MustErrGroupFromCtx(ctx)
 
-			op, err := newStorageOperator(ctx, logger, ns, volNS, opcfg, chain, resync)
+			op, err := newStorageOperator(ctx, logger, ns, volNS, opcfg, chain, resync, nodeHint)
 			if err != nil {
 				return err
 			}
@@ -109,6 +110,11 @@ func Cmd() *cobra.Command {
 
 	cmd.Flags().Duration(FlagResyncInterval, 5*time.Minute, "full reconcile sweep interval")
 	if err := viper.BindPFlag(FlagResyncInterval, cmd.Flags().Lookup(FlagResyncInterval)); err != nil {
+		panic(err)
+	}
+
+	cmd.Flags().Bool(FlagProvisionNodeHint, false, "annotate provisioning claims with the selected node (required for node-constrained provisioners like local-path; leave off for Ceph RBD)")
+	if err := viper.BindPFlag(FlagProvisionNodeHint, cmd.Flags().Lookup(FlagProvisionNodeHint)); err != nil {
 		panic(err)
 	}
 

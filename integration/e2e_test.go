@@ -585,6 +585,9 @@ func (s *IntegrationTestSuite) SetupSuite() {
 			WithFlag(operatorcommon.FlagRESTPort, storageOperatorPort).
 			WithFlag("node", s.validator.RPCAddress).
 			WithFlag("resync-interval", "5s").
+			// local-path cannot provision Immediate-binding claims without
+			// a node hint ("no node was specified")
+			WithFlag("provision-node-hint", true).
 			WithProvider(s.addrProvider.String())
 
 		s.group.Go(func() error {

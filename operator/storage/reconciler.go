@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -48,6 +49,15 @@ type reconciler struct {
 	chain ChainQuery
 	log   log.Logger
 	now   func() time.Time
+
+	// nodeHint annotates the initial provisioning claim with
+	// volume.kubernetes.io/selected-node. Node-constrained provisioners
+	// (rancher.io/local-path) cannot provision an Immediate-binding claim
+	// without it ("configuration error, no node was specified") because no
+	// consuming pod ever schedules the parked holder PVC. Network-attached
+	// provisioners (Ceph RBD) don't need the hint; leave it off there so
+	// topology stays unconstrained.
+	nodeHint bool
 }
 
 func newReconciler(kc kubernetes.Interface, ac akashclientset.Interface, ns, volNS string, chain ChainQuery, logger log.Logger) *reconciler {
@@ -60,6 +70,46 @@ func newReconciler(kc kubernetes.Interface, ac akashclientset.Interface, ns, vol
 		log:   logger,
 		now:   time.Now,
 	}
+}
+
+// pvcSelectedNodeAnnotation is how the WaitForFirstConsumer scheduler hands
+// external provisioners the chosen node; setting it directly is the
+// established way to drive node-constrained provisioning without a pod.
+const pvcSelectedNodeAnnotation = "volume.kubernetes.io/selected-node"
+
+// hintNode picks the node the provisioning claim is pinned to: the first
+// Ready, schedulable node carrying the class capability label (the same
+// label the inventory operator's node discovery writes and the scheduler
+// affinity in cluster/kube/builder keys on), by name for determinism.
+func (r *reconciler) hintNode(ctx context.Context, class string) (string, error) {
+	sel := fmt.Sprintf("%s.class.%s=1", builder.AkashServiceCapabilityStorage, class)
+
+	nodes, err := r.kc.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		return "", err
+	}
+
+	names := make([]string, 0, len(nodes.Items))
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.Unschedulable {
+			continue
+		}
+		for _, cond := range node.Status.Conditions {
+			if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionTrue {
+				names = append(names, node.Name)
+				break
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		return "", fmt.Errorf("%w: no ready node carries storage class %q", ErrVolumeOperator, class)
+	}
+
+	sort.Strings(names)
+
+	return names[0], nil
 }
 
 func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
@@ -426,10 +476,22 @@ func (r *reconciler) ensurePVC(ctx context.Context, ns string, vol *crd.Volume, 
 
 	class := RetainClass(vol.Spec.Class)
 
+	var annotations map[string]string
+	if r.nodeHint && volumeName == "" {
+		// initial provisioning claim only: attach/re-park claims pre-bind
+		// to an existing PV and never provision
+		node, err := r.hintNode(ctx, vol.Spec.Class)
+		if err != nil {
+			return nil, err
+		}
+		annotations = map[string]string{pvcSelectedNodeAnnotation: node}
+	}
+
 	pvc = &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      vol.Name,
-			Namespace: ns,
+			Name:        vol.Name,
+			Namespace:   ns,
+			Annotations: annotations,
 			Labels: map[string]string{
 				builder.AkashManagedLabelName:   builder.ValTrue,
 				builder.AkashComponentLabelName: builder.AkashComponentVolume,

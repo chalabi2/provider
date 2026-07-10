@@ -1025,6 +1025,9 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 				WithFlag("resync-interval", "5s").
 				WithFlag("k8s-manifest-ns", storageManifestNSB).
 				WithFlag("volumes-namespace", storageVolumesNSB).
+				// local-path cannot provision Immediate-binding claims
+				// without a node hint ("no node was specified")
+				WithFlag("provision-node-hint", true).
 				WithProvider(s.addrProviderB.String())...,
 		)
 		s.Assert().NoError(err)
