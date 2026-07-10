@@ -851,7 +851,8 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	// providers sharing one RPC client (the integration harness's local
 	// client, or any embedded node) otherwise contend for one event-bus
 	// subscription and the loser goes silently deaf
-	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli-"+cctx.FromAddress.String(), bus)
+	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli-"+cctx.FromAddress.String(), bus,
+		events.WithLogger(logger.With("cmp", "chain-events")))
 	if err != nil {
 		return err
 	}
