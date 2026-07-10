@@ -507,6 +507,7 @@ func (s *IntegrationTestSuite) SetupSuite() {
 		pArgs = pArgs.
 			WithFlag("volume-classes", "beta3").
 			WithFlag("volume-max-retention", "48h").
+			WithFlag("volume-max-replicas", "4").
 			WithFlag("storage-operator-endpoint", s.storageOperatorHost).
 			WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
 			// withdrawal is the escrow-exhaustion detector: the floor pair

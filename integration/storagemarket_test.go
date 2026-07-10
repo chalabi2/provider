@@ -1048,6 +1048,7 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 		WithFlag("k8s-manifest-ns", storageManifestNSB).
 		WithFlag("volume-classes", storageVolClass).
 		WithFlag("volume-max-retention", "48h").
+		WithFlag("volume-max-replicas", "4").
 		WithFlag("storage-operator-endpoint", s.storageOperatorHostB).
 		WithFlag(pcmd.FlagGatewayGRPCListenAddress, s.grpcHostProviderB).
 		WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
