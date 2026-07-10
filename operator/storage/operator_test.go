@@ -2,14 +2,18 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kfake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
@@ -254,6 +258,91 @@ func TestApplyAdoptionEventMovesSpec(t *testing.T) {
 		},
 		Vid: testVID,
 	}))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, strconv.FormatUint(newDSeq, 10), uvol.Spec.GroupID.DSeq)
+	require.Equal(t, crd.VolumePhaseAdopting, uvol.Status.Phase)
+}
+
+// TestApplyLeaseClosedIgnoresAdoptedVolume: after an adoption moved the
+// spec to the new deployment (but before the daemon re-recorded the lease),
+// a close of the dead lease must not restart the retention clock — the
+// volume just survived that close by being adopted.
+func TestApplyLeaseClosedIgnoresAdoptedVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+	// applyAdoption moved the group; Spec.LeaseID still names the dead lease
+	vol.Spec.GroupID.DSeq = strconv.FormatUint(lid.DSeq+7, 10)
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
+	require.Nil(t, uvol.Status.RetainedUntil)
+}
+
+// TestResyncChainIgnoresAdoptedVolume is the same guard on the resync
+// sweep: the dead lease is not in the active set, but the spec has moved
+// to the adopting deployment.
+func TestResyncChainIgnoresAdoptedVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+	vol.Spec.GroupID.DSeq = strconv.FormatUint(lid.DSeq+7, 10)
+
+	chain := &fakeChainClient{active: map[string]bool{}}
+
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
+	require.Nil(t, uvol.Status.RetainedUntil)
+}
+
+// TestApplyChainEventRetriesOnConflict: a transient k8s update conflict
+// (reconciler racing the event handler) must not drop the event — adoption
+// events in particular are not healed by the resync sweep.
+func TestApplyChainEventRetriesOnConflict(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseRetained)
+	vol.Status.PVName = testPV
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	conflicted := false
+	s.ac.PrependReactor("update", "volumes", func(ktesting.Action) (bool, runtime.Object, error) {
+		if conflicted {
+			return false, nil, nil
+		}
+		conflicted = true
+		return true, nil, kerrors.NewConflict(
+			schema.GroupResource{Group: "akash.network", Resource: "volumes"},
+			vol.Name, fmt.Errorf("the object has been modified"))
+	})
+
+	newDSeq := lid.DSeq + 7
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &dv1.EventVolumeAdopted{
+		ID: dv1.GroupID{
+			Owner: lid.Owner,
+			DSeq:  newDSeq,
+			GSeq:  1,
+		},
+		Adopted: dv1.VolumeRef{
+			Owner: lid.Owner,
+			DSeq:  lid.DSeq,
+			GSeq:  lid.GSeq,
+			Name:  testVID,
+		},
+		Vid: testVID,
+	}))
+
+	require.True(t, conflicted)
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, strconv.FormatUint(newDSeq, 10), uvol.Spec.GroupID.DSeq)
