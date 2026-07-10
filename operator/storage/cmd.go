@@ -14,6 +14,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	cflags "pkg.akt.dev/go/cli/flags"
+	nclient "pkg.akt.dev/go/node/client"
 	aclient "pkg.akt.dev/go/node/client/discovery"
 	"pkg.akt.dev/go/sdkutil"
 
@@ -140,26 +141,24 @@ func chainClientFromFlags(ctx context.Context, provider string) (ChainClient, er
 		return nil, fmt.Errorf("%w: no chain node configured", ErrVolumeOperator)
 	}
 
-	rpcClient, err := sdkclient.NewClientFromNode(nodeURI)
+	// the akash-extended RPCClient (embeds the comet websocket client):
+	// discovery's queryClientInfo rejects a plain *http.HTTP, and the
+	// discovered query client needs a live RPC connection on the context
+	// for its queries. One client serves discovery, queries, and the
+	// event stream.
+	// NewClient starts the websocket lifecycle itself (errgroup-managed)
+	rpcClient, err := nclient.NewClient(ctx, nodeURI)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := rpcClient.Start(); err != nil {
 		return nil, err
 	}
 
 	encodingConfig := sdkutil.MakeEncodingConfig()
 
-	// discovery must NOT carry the comet client: queryClientInfo only
-	// accepts the akash-extended RPCClient type and rejects a plain
-	// *http.HTTP ("unsupported RPC client"); with no client set it
-	// version-discovers over its own JSON-RPC call to the node. The comet
-	// client stays dedicated to the event stream below.
 	cctx := sdkclient.Context{}.
 		WithCodec(encodingConfig.Codec).
 		WithInterfaceRegistry(encodingConfig.InterfaceRegistry).
-		WithNodeURI(nodeURI)
+		WithNodeURI(nodeURI).
+		WithClient(rpcClient)
 
 	qc, err := aclient.DiscoverQueryClient(ctx, cctx)
 	if err != nil {
