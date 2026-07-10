@@ -113,7 +113,12 @@ func (c *chainClient) Events(ctx context.Context, name string) (<-chan interface
 
 	query := fmt.Sprintf("%s='%s'", cmtypes.EventTypeKey, cmtypes.EventNewBlockHeader)
 
-	blkch, err := ebus.Subscribe(ctx, name, query, 100)
+	// unique per operator instance: two operators sharing one RPC client
+	// (the integration harness's local client, or any embedded node) must
+	// not contend for a single event-bus subscription keyed by the bare name
+	subscriber := name + "-" + c.provider
+
+	blkch, err := ebus.Subscribe(ctx, subscriber, query, 100)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +128,7 @@ func (c *chainClient) Events(ctx context.Context, name string) (<-chan interface
 	go func() {
 		defer close(out)
 		defer func() {
-			_ = ebus.Unsubscribe(context.Background(), name, query)
+			_ = ebus.Unsubscribe(context.Background(), subscriber, query)
 		}()
 
 		for {

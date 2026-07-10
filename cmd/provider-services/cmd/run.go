@@ -868,7 +868,11 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	evtSvc, err := newEventsService(ctx, cctx.Client, bus, logger)
+	// the subscriber id must be unique per daemon instance: co-resident
+	// providers sharing one RPC client (the integration harness's local
+	// client, or any embedded node) otherwise contend for one event-bus
+	// subscription and the loser goes silently deaf
+	evtSvc, err := newEventsService(ctx, cctx.Client, "provider-cli-"+cctx.FromAddress.String(), bus, logger)
 	if err != nil {
 		return err
 	}
@@ -1050,8 +1054,8 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 // newEventsService starts the chain event service. The service adds only "cmp" to the
 // logger it is given, so "module" is bound here for the module filter to apply.
-func newEventsService(ctx context.Context, node sdkclient.CometRPC, bus pubsub.Bus, logger log.Logger) (events.Service, error) {
-	return events.NewEvents(ctx, node, "provider-cli", bus, events.WithLogger(logger.With("module", "events")))
+func newEventsService(ctx context.Context, node sdkclient.CometRPC, name string, bus pubsub.Bus, logger log.Logger) (events.Service, error) {
+	return events.NewEvents(ctx, node, name, bus, events.WithLogger(logger.With("module", "events")))
 }
 
 // attestationSidecarEnv returns the environment injected into attestation sidecars:

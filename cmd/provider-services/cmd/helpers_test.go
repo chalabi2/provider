@@ -109,7 +109,7 @@ func TestEventsServiceLogsUnderEventsModule(t *testing.T) {
 
 	node := &eventsNode{headers: make(chan ctypes.ResultEvent)}
 
-	svc, err := newEventsService(ctx, node, bus, root.With("module", "provider"))
+	svc, err := newEventsService(ctx, node, "provider-cli", bus, root.With("module", "provider"))
 	require.NoError(t, err)
 	defer svc.Shutdown()
 
