@@ -54,6 +54,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -978,7 +979,7 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 	)
 	s.Require().NoError(err)
 
-	_, err = clitestutil.TxPublishServerExec(
+	res, err = clitestutil.TxPublishServerExec(
 		s.ctx,
 		cctx,
 		cli.TestFlags().
@@ -987,6 +988,17 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 	)
 	s.Require().NoError(err)
 	s.Require().NoError(s.network.WaitForNextBlock())
+	clitestutil.ValidateTxSuccessful(s.ctx, s.T(), cctx, res.Bytes())
+
+	// the cert CLI writes the PEM under the chain home (simd); the daemon
+	// runs with the CLI home (simcli). The base suite copies provider A's
+	// and the tenant's PEMs across - provider B needs the same copy or its
+	// account querier fails startup on the missing PEM.
+	pemSrc := fmt.Sprintf("%s/%s.pem", s.cctx.HomeDir, s.addrProviderB.String())
+	pemDst := fmt.Sprintf("%s/%s.pem", strings.Replace(s.cctx.HomeDir, "simd", "simcli", 1), s.addrProviderB.String())
+	pemData, err := os.ReadFile(pemSrc)
+	s.Require().NoError(err)
+	s.Require().NoError(os.WriteFile(pemDst, pemData, 0o400))
 
 	dialer := net.Dialer{
 		Timeout: time.Second * 3,
