@@ -298,13 +298,13 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	s.Require().NoError(s.network.WaitForNextBlock())
 	clitestutil.ValidateTxSuccessful(s.ctx, s.T(), cctx, res.Bytes())
 
-	numPorts := 4
+	numPorts := 5
 	if s.ipMarketplace {
 		numPorts += 2
 	}
 	if s.storageMarket {
-		// storage operator REST + provider gateway gRPC (VolumeTransfer)
-		numPorts += 2
+		// storage operator REST
+		numPorts++
 	}
 
 	ports, err := testnet.GetFreePorts(numPorts)
@@ -468,6 +468,11 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	var ipOperatorHost string
 	var ipOperatorPort int
 
+	// the provider gateway gRPC otherwise binds its fixed 0.0.0.0:8444
+	// default — colliding with anything already on the host (a running
+	// provider, another harness). Every suite gets a random port.
+	s.grpcHostProvider = fmt.Sprintf("localhost:%d", ports[3])
+
 	// all commands use Viper which is meant for use by a single goroutine only
 	// so wait for the provider to start before running the hostname operator
 	pArgs := cli.TestFlags().
@@ -476,6 +481,7 @@ func (s *IntegrationTestSuite) SetupSuite() {
 		WithGasAuto().
 		WithFlag(pcmd.FlagClusterK8s, true).
 		WithFlag(pcmd.FlagGatewayListenAddress, provURL.Host).
+		WithFlag(pcmd.FlagGatewayGRPCListenAddress, s.grpcHostProvider).
 		WithFlag(pcmd.FlagClusterPublicHostname, ptestutil.TestClusterPublicHostname).
 		WithFlag(pcmd.FlagClusterNodePortQuantity, ptestutil.TestClusterNodePortQuantity).
 		WithFlag(pcmd.FlagPersistentConfigBackend, "memory").
@@ -497,13 +503,11 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	if s.storageMarket {
 		storageOperatorPort = ports[len(ports)-1]
 		s.storageOperatorHost = fmt.Sprintf("localhost:%d", storageOperatorPort)
-		s.grpcHostProvider = fmt.Sprintf("localhost:%d", ports[len(ports)-2])
 
 		pArgs = pArgs.
 			WithFlag("volume-classes", "beta3").
 			WithFlag("volume-max-retention", "48h").
 			WithFlag("storage-operator-endpoint", s.storageOperatorHost).
-			WithFlag(pcmd.FlagGatewayGRPCListenAddress, s.grpcHostProvider).
 			WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
 			// withdrawal is the escrow-exhaustion detector: the floor pair
 			// (1m monitor, 1m withdrawal) keeps the money path inside test

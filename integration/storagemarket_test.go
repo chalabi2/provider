@@ -8,16 +8,19 @@
 //	cd _run/kube && direnv exec . make kube-cluster-setup-e2e && cd ../..
 //	direnv exec . make test-e2e-integration
 //
-// or just these suites:
+// or just these suites (testify subtests are named after test METHODS,
+// not suite structs, so select by method via -testify.m — testify then
+// skips SetupSuite entirely for suites with no matching methods):
 //
-//	KUBE_INGRESS_IP=127.0.0.1 KUBE_INGRESS_PORT=10080 TEST_INTEGRATION=true \
+//	KUBE_INGRESS_IP=127.0.0.1 KUBE_INGRESS_PORT=<kind host port for 80/tcp> \
+//	  TEST_INTEGRATION=true \
 //	  go test -count=1 -tags e2e -v ./integration/... \
-//	  -run 'TestIntegrationTestSuite/(E2EStorageMarket|E2EStorageMarketMigration)' \
+//	  -run TestIntegrationTestSuite \
+//	  -testify.m '^(TestLifecycleCore|TestMoneyPathExhaustionAdoption|TestVolumeMigration)$' \
 //	  -timeout 5400s
 //
-// (TestIntegrationTestSuite drives every suite; budget the -timeout
-// accordingly - the money path alone waits out a real escrow runway plus
-// the 1m withdrawal cadence.)
+// (budget the -timeout: the money path alone waits out a real escrow
+// runway plus the 1m withdrawal cadence.)
 //
 // Cluster prerequisites, all installed by kube-cluster-setup-e2e:
 //   - beta3 (Delete) and beta3-retain (Retain, Immediate binding)

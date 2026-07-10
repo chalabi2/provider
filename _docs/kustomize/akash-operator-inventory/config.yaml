@@ -3,6 +3,10 @@ version: v1
 cluster_storage:
   - default
   - beta2
+  # beta3 is the sellable class AEP-87 volume orders bid against; without
+  # this allowlist entry the inventory operator neither reports beta3
+  # capacity nor labels nodes with it, and shouldBidVolume never bids.
+  - beta3
 exclude:
   nodes: []
   node_storage: []
