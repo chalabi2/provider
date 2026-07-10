@@ -1187,15 +1187,28 @@ func (c *client) ServiceStatus(ctx context.Context, lid mtypes.LeaseID, name str
 		return nil, kubeclienterrors.ErrNoServiceForLease
 	}
 
-	// Check if this service uses persistent storage (should be StatefulSet)
-	// This logic must match the deployment creation logic in Deploy()
+	// Mirrors Deploy's workload-type switch: a service with a persistent
+	// storage class renders as a StatefulSet, EXCEPT when it mounts an AEP-87
+	// volume ref (params.Volume set) - those attach a pre-bound PVC and render
+	// as a Deployment, so status/exec must look the workload up there too.
+	hasVolumeRef := false
+	if params := svc.Params; params != nil {
+		for _, param := range params.Storage {
+			if param.Volume != "" {
+				hasVolumeRef = true
+				break
+			}
+		}
+	}
+
 	isDeployment := true
-	persistent := false
-	for i := range svc.Resources.Storage {
-		attrVal := svc.Resources.Storage[i].Attributes.Find(sdl.StorageAttributePersistent)
-		if persistent, _ = attrVal.AsBool(); persistent {
-			isDeployment = false
-			break
+	if !hasVolumeRef {
+		for i := range svc.Resources.Storage {
+			attrVal := svc.Resources.Storage[i].Attributes.Find(sdl.StorageAttributePersistent)
+			if persistent, _ := attrVal.AsBool(); persistent {
+				isDeployment = false
+				break
+			}
 		}
 	}
 
