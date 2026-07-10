@@ -212,6 +212,8 @@ spec:
                                       type: boolean
                                     mount:
                                       type: string
+                                    volume:
+                                      type: string
                               permissions:
                                 type: object
                                 nullable: true
@@ -420,6 +422,8 @@ spec:
                                     readOnly:
                                       type: boolean
                                     mount:
+                                      type: string
+                                    volume:
                                       type: string
                               permissions:
                                 type: object
