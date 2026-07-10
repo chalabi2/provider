@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/pager"
+	"k8s.io/client-go/util/retry"
 
 	"cosmossdk.io/log"
 
@@ -336,7 +337,7 @@ func (op *storageOperator) resyncChain(ctx context.Context) error {
 			}
 		}
 
-		if lid, err := vol.Spec.LeaseID.FromCRD(); err == nil && !active[lid.String()] {
+		if lid, err := vol.Spec.LeaseID.FromCRD(); err == nil && !active[lid.String()] && volumeLeaseIsCurrent(vol, lid) {
 			switch vol.Status.Phase {
 			case crd.VolumePhaseRetained, crd.VolumePhaseReleasing, crd.VolumePhaseAdopting:
 				// already accounted for or frozen
@@ -357,7 +358,29 @@ func (op *storageOperator) resyncChain(ctx context.Context) error {
 	return nil
 }
 
+// volumeLeaseIsCurrent reports whether the volume's recorded lease still
+// belongs to the deployment the spec names. An adoption moves Spec.GroupID
+// to the adopting deployment (applyAdoption, then the reconciler's verified
+// re-bind) before the daemon's DeployVolume re-records the lease; in that
+// window the lease record is stale and the dead lease's closure must not
+// start the retention clock on the adopted volume — surviving that closure
+// is the whole point of the adoption.
+func volumeLeaseIsCurrent(vol *crd.Volume, lid mv1.LeaseID) bool {
+	return vol.Spec.GroupID.DSeq == strconv.FormatUint(lid.DSeq, 10)
+}
+
+// applyChainEvent applies a single chain event, retrying on k8s update
+// conflicts: every handler re-reads current state per attempt and is
+// idempotent. A dropped event is not always healed by the resync sweep
+// (adoptions are only applied from the event), so a transient conflict
+// with the reconciler must not lose one.
 func (op *storageOperator) applyChainEvent(ctx context.Context, ev interface{}) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return op.applyChainEventOnce(ctx, ev)
+	})
+}
+
+func (op *storageOperator) applyChainEventOnce(ctx context.Context, ev interface{}) error {
 	switch ev := ev.(type) {
 	case *mv1.EventLeaseClosed:
 		return op.applyLeaseClosed(ctx, ev.ID)
@@ -396,7 +419,7 @@ func (op *storageOperator) applyLeaseClosed(ctx context.Context, lid mv1.LeaseID
 			continue
 		}
 
-		if vlid, err := vol.Spec.LeaseID.FromCRD(); err == nil && vlid.String() == closed {
+		if vlid, err := vol.Spec.LeaseID.FromCRD(); err == nil && vlid.String() == closed && volumeLeaseIsCurrent(vol, vlid) {
 			switch vol.Status.Phase {
 			case crd.VolumePhaseRetained, crd.VolumePhaseReleasing, crd.VolumePhaseAdopting:
 			case crd.VolumePhaseExporting:
