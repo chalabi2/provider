@@ -123,6 +123,11 @@ volumes:
   %[1]s:
     size: 1Gi
     class: beta3
+    # max-replicas: 1 keeps "tx volume create" from printing its
+    # no-redundancy advisory: the CLI sends it to stderr, but the test
+    # harness (testutil.ApplyMockIO) merges stderr into the same buffer
+    # ValidateTxSuccessful parses as the tx JSON response.
+    max-replicas: 1
     lifecycle:
       reclaim: retain
       retention: 1h
@@ -151,6 +156,11 @@ volumes:
   %[1]s:
     size: 1Gi
     class: beta3
+    # max-replicas: 1 keeps "tx volume create" from printing its
+    # no-redundancy advisory: the CLI sends it to stderr, but the test
+    # harness (testutil.ApplyMockIO) merges stderr into the same buffer
+    # ValidateTxSuccessful parses as the tx JSON response.
+    max-replicas: 1
     lifecycle:
       reclaim: retain
       retention: 1h
