@@ -151,11 +151,15 @@ func chainClientFromFlags(ctx context.Context, provider string) (ChainClient, er
 
 	encodingConfig := sdkutil.MakeEncodingConfig()
 
+	// discovery must NOT carry the comet client: queryClientInfo only
+	// accepts the akash-extended RPCClient type and rejects a plain
+	// *http.HTTP ("unsupported RPC client"); with no client set it
+	// version-discovers over its own JSON-RPC call to the node. The comet
+	// client stays dedicated to the event stream below.
 	cctx := sdkclient.Context{}.
 		WithCodec(encodingConfig.Codec).
 		WithInterfaceRegistry(encodingConfig.InterfaceRegistry).
-		WithNodeURI(nodeURI).
-		WithClient(rpcClient)
+		WithNodeURI(nodeURI)
 
 	qc, err := aclient.DiscoverQueryClient(ctx, cctx)
 	if err != nil {
