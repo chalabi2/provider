@@ -70,6 +70,7 @@ import (
 
 	"pkg.akt.dev/go/cli"
 	clitestutil "pkg.akt.dev/go/cli/testutil"
+	arpcclient "pkg.akt.dev/go/node/client"
 	aclient "pkg.akt.dev/go/node/client/discovery"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
@@ -1000,6 +1001,22 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 	s.Require().NoError(err)
 	s.Require().NoError(os.WriteFile(pemDst, pemData, 0o400))
 
+	// Provider B needs its OWN RPC client. The base suite dials one akash
+	// client and shares it via s.cctx; both provider daemons would then
+	// reuse that single client. The CometBFT *http.HTTP event client
+	// (WSEvents) keys subscriptions by query string ALONE - the subscriber
+	// id is ignored - so two co-resident daemons subscribing to the same
+	// NewBlockHeader query collide: the second subscribe overwrites the
+	// first daemon's channel and the first goes permanently deaf (never
+	// sees EventOrderCreated, never bids). In production each provider is a
+	// separate process with its own connection, so this only bites the
+	// co-resident harness. A distinct client gives provider B its own
+	// WSEvents subscription map, leaving provider A's client topology
+	// identical to the single-provider suites.
+	clientB, err := arpcclient.NewClient(s.ctx, s.validator.RPCAddress)
+	s.Require().NoError(err)
+	cctxB := s.cctx.WithClient(clientB)
+
 	dialer := net.Dialer{
 		Timeout: time.Second * 3,
 	}
@@ -1010,7 +1027,7 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 
 		_, err := ptestutil.RunLocalOperator(
 			s.ctx,
-			cctx,
+			cctxB,
 			cli.TestFlags().
 				With("hostname").
 				WithFlag(operatorcommon.FlagRESTAddress, "127.0.0.1").
@@ -1028,7 +1045,7 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 
 		_, err := ptestutil.RunLocalOperator(
 			s.ctx,
-			cctx,
+			cctxB,
 			cli.TestFlags().
 				With("storage").
 				WithFlag(operatorcommon.FlagRESTAddress, "127.0.0.1").
@@ -1073,7 +1090,7 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 	s.group.Go(func() error {
 		_, err := ptestutil.RunLocalProvider(
 			s.ctx,
-			cctx,
+			cctxB,
 			pArgsB...,
 		)
 		if err != nil {
