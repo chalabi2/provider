@@ -29,8 +29,21 @@ func Cmd() *cobra.Command {
 		Short:        "kubernetes operator managing AEP-87 first-class volumes",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ns := viper.GetString(providerflags.FlagK8sManifestNS)
-			volNS := viper.GetString(FlagVolumesNS)
+			// Read the namespaces from this command's own flagset rather than
+			// the process-global viper: co-resident operators in the integration
+			// harness share one viper, so the last cobra command to bind these
+			// keys owns the global value and a second storage operator would
+			// otherwise reconcile the wrong namespaces. In a single-process
+			// production deployment this reads the identical value viper would
+			// (no env binding is configured for these flags).
+			ns, err := cmd.Flags().GetString(providerflags.FlagK8sManifestNS)
+			if err != nil {
+				return err
+			}
+			volNS, err := cmd.Flags().GetString(FlagVolumesNS)
+			if err != nil {
+				return err
+			}
 			resync := viper.GetDuration(FlagResyncInterval)
 			nodeHint := viper.GetBool(FlagProvisionNodeHint)
 

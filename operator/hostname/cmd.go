@@ -24,13 +24,24 @@ func Cmd() *cobra.Command {
 			ctx := cmd.Context()
 			group := fromctx.MustErrGroupFromCtx(ctx)
 
-			ns := viper.GetString(providerflags.FlagK8sManifestNS)
+			// Read the manifest namespace from this command's own flagset
+			// instead of the process-global viper. Co-resident operators in
+			// the integration harness share a single viper instance, so the
+			// last cobra command to BindPFlag(k8s-manifest-ns) owns the global
+			// key; a second hostname operator would otherwise watch the wrong
+			// namespace and never turn its ProviderHosts into ingresses. In a
+			// production single-process deployment this reads the identical
+			// value viper would (no env binding is configured for this flag).
+			ns, err := cmd.Flags().GetString(providerflags.FlagK8sManifestNS)
+			if err != nil {
+				return err
+			}
 
 			config := common.GetOperatorConfigFromViper()
 
 			logger := common.OpenLogger().With("op", "hostname")
 
-			ctx, err := withGatewayApi(ctx)
+			ctx, err = withGatewayApi(ctx)
 			if err != nil {
 				return err
 			}
