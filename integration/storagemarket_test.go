@@ -1282,15 +1282,19 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 
 	// the compute re-attaches and runs on the migrated volume at B: a fresh
 	// write round-trips through the app on provider B's re-attached lease.
-	// The pre-migration "value" key is deliberately NOT expected here - the
+	// We overwrite the pre-migration payload rather than expect it back - the
 	// file driver's documented unit of transfer is the single "image" file
 	// (an RBD volume exports its real block image; local-path proves the
 	// coordination and transfer plumbing, not the app's live KV store), so
 	// only the staged image survives the copy. That payload's survival is
 	// asserted directly against the migrated PV below.
+	//
+	// The e2e-test app exposes exactly one key: the literal routes
+	// /SET/value and /GET/value (github.com/akash-network/e2e-test). Any other
+	// key 404s at the app, so the liveness round-trip must use "value".
 	migratedProof := uuid.New().String()
-	s.appWrite(host2, "migrated", migratedProof)
-	s.Require().Equal(migratedProof, s.appRead(host2, "migrated"), "the app must run on the migrated volume at provider B")
+	s.appWrite(host2, "value", migratedProof)
+	s.Require().Equal(migratedProof, s.appRead(host2, "value"), "the app must run on the migrated volume at provider B")
 
 	// and the staged UUID - the file driver's transferred payload - is
 	// intact on the volume B now serves
