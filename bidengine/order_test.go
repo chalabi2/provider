@@ -22,9 +22,9 @@ import (
 	providermocks "pkg.akt.dev/go/mocks/node/client/provider"
 	audittypes "pkg.akt.dev/go/node/audit/v1"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	"pkg.akt.dev/go/node/types/constants"
@@ -66,7 +66,7 @@ type alwaysFailsBidPricingStrategy struct {
 var _ BidPricingStrategy = (*testBidPricingStrategy)(nil)
 var _ BidPricingStrategy = (*alwaysFailsBidPricingStrategy)(nil)
 
-func makeMocks(s *orderTestScaffold) {
+func defaultGroupResult() *dvbeta.QueryGroupResponse {
 	groupResult := &dvbeta.QueryGroupResponse{}
 	groupResult.Group.GroupSpec.Name = "testGroupName"
 	groupResult.Group.GroupSpec.Resources = make(dvbeta.ResourceUnits, 1)
@@ -102,6 +102,10 @@ func makeMocks(s *orderTestScaffold) {
 
 	groupResult.Group.GroupSpec.Resources[0] = resource
 
+	return groupResult
+}
+
+func makeMocks(s *orderTestScaffold, groupResult *dvbeta.QueryGroupResponse) {
 	homeDir, _ := os.MkdirTemp("", "akash-network-test-*")
 
 	queryMocks := &clientmocks.QueryClient{}
@@ -184,7 +188,7 @@ func makeOrderForTest(
 
 	myLog := testutil.Logger(t)
 
-	makeMocks(&scaffold)
+	makeMocks(&scaffold, defaultGroupResult())
 
 	scaffold.testAddr = testutil.AccAddress(t)
 

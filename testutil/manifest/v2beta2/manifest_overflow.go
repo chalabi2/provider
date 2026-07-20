@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	atestutil "pkg.akt.dev/go/testutil"
 )

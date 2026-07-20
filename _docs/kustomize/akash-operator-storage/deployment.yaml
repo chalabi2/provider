@@ -1,0 +1,88 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator-storage
+  labels:
+    app.kubernetes.io/name: storage
+    app.kubernetes.io/instance: storage-service
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/part-of: provider
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: storage
+      app.kubernetes.io/instance: storage-service
+      app.kubernetes.io/component: operator
+      app.kubernetes.io/part-of: provider
+  # replicas MUST stay 1: the operator is the single writer of the PV
+  # claimRef choreography; all state is re-derivable from CRDs + PVs +
+  # chain queries.
+  replicas: 1
+  revisionHistoryLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: storage
+        app.kubernetes.io/instance: storage-service
+        app.kubernetes.io/component: operator
+        app.kubernetes.io/part-of: provider
+    spec:
+      serviceAccountName: operator-storage
+      containers:
+        - name: operator-storage
+          image: ghcr.io/akash-network/provider:stable
+          imagePullPolicy: IfNotPresent
+          args: ["provider-services", "operator", "storage"]
+          ports:
+            - name: rest
+              containerPort: 8080
+          env:
+            - name: AP_K8S_MANIFEST_NS
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: k8s-manifest-ns
+            - name: AP_VOLUMES_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: volumes-namespace
+            - name: AP_RESYNC_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: resync-interval
+            - name: AP_PRUNE_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: prune-interval
+            - name: AP_WEB_REFRESH_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: web-refresh-interval
+            - name: AP_RETRY_DELAY
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: retry-delay
+            - name: AP_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: provider-address
+            - name: AP_NODE
+              valueFrom:
+                configMapKeyRef:
+                  name: operator-storage
+                  key: node
+            - name: AP_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AP_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace

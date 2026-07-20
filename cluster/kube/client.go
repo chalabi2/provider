@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	restclient "k8s.io/client-go/rest"
-	mapi "pkg.akt.dev/go/manifest/v2beta3"
+	mapi "pkg.akt.dev/go/manifest/v2beta4"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	apclient "pkg.akt.dev/go/provider/client"
@@ -575,9 +575,16 @@ func (c *client) Deploy(ctx context.Context, deployment ctypes.IDeployment) (err
 			}
 		}
 
-		if persistent {
+		switch {
+		case serviceHasVolumeRefs(service):
+			// AEP-87 attach: the service mounts a first-class volume via a
+			// pre-bound PVC, so it renders as a Deployment (StatefulSet
+			// VolumeClaimTemplates' positional per-replica claims don't
+			// apply) with replicas forced to 1 in the workload builder.
+			svc.deployment = builder.NewDeployment(workload)
+		case persistent:
 			svc.statefulSet = builder.BuildStatefulSet(workload)
-		} else {
+		default:
 			svc.deployment = builder.NewDeployment(workload)
 		}
 
@@ -1092,14 +1099,24 @@ func (c *client) ServiceStatus(ctx context.Context, lid mtypes.LeaseID, name str
 		return nil, kubeclienterrors.ErrNoServiceForLease
 	}
 
+	// Mirrors Deploy's workload-type switch: a mounted persistent class
+	// renders as a StatefulSet, EXCEPT when the mount is an AEP-87 volume
+	// ref (params.Volume set) - those attach a pre-bound PVC and render as
+	// a Deployment, so status/exec must look the workload up there too.
 	isDeployment := true
 	if params := svc.Params; params != nil {
+		hasVolumeRef := false
+		hasMount := false
 		for _, param := range params.Storage {
-			if param.Mount != "" {
-				isDeployment = false
+			if param.Volume != "" {
+				hasVolumeRef = true
 				break
 			}
+			if param.Mount != "" {
+				hasMount = true
+			}
 		}
+		isDeployment = hasVolumeRef || !hasMount
 	}
 
 	if isDeployment {

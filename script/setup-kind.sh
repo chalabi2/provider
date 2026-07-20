@@ -26,7 +26,19 @@ install_crd() {
     set -x
     kubectl apply -f "$rootdir/pkg/apis/akash.network/crd.yaml"
     kubectl apply -f "$rootdir/_docs/kustomize/storage/storageclass.yaml"
-    kubectl patch node "${KIND_NAME}-control-plane" -p '{"metadata":{"labels":{"akash.network/storageclasses":"beta2.default"}}}'
+    kubectl patch node "${KIND_NAME}-control-plane" -p '{"metadata":{"labels":{"akash.network/storageclasses":"beta2.default.beta3"}}}'
+
+    # AEP-87 two-provider e2e: the in-process replication file driver reads
+    # and writes local-path PV host paths directly, so the provisioner's
+    # storage directory must resolve to the SAME absolute path on the host
+    # and inside the kind node. kind-config.yaml mounts the host dir at that
+    # path; here the provisioner is repointed at it.
+    if kubectl -n local-path-storage get configmap local-path-config >/dev/null 2>&1; then
+        kubectl -n local-path-storage get configmap local-path-config -o yaml \
+            | sed 's|/var/local-path-provisioner|/tmp/akash-e2e-storage|g' \
+            | kubectl -n local-path-storage apply -f -
+        kubectl -n local-path-storage rollout restart deployment local-path-provisioner
+    fi
 }
 
 install_metrics() {

@@ -82,6 +82,13 @@ func Cmd() *cobra.Command {
 			if st, err = NewRancher(ctx); err != nil {
 				return err
 			}
+			storage = append(storage, st)
+
+			// AEP-87 volume allocations: an allocated-only overlay the
+			// cluster state merges into the base storage classes
+			if st, err = NewVolumes(ctx); err != nil {
+				return err
+			}
 
 			discoveryImage := viper.GetString(FlagDiscoveryImage)
 			namespace := viper.GetString(FlagPodNamespace)

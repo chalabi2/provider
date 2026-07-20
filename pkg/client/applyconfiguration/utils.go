@@ -62,6 +62,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &akashnetworkv2beta2.ManifestServiceExposeHTTPOptionsApplyConfiguration{}
 	case v2beta2.SchemeGroupVersion.WithKind("ManifestServiceParams"):
 		return &akashnetworkv2beta2.ManifestServiceParamsApplyConfiguration{}
+	case v2beta2.SchemeGroupVersion.WithKind("ManifestServicePermissions"):
+		return &akashnetworkv2beta2.ManifestServicePermissionsApplyConfiguration{}
 	case v2beta2.SchemeGroupVersion.WithKind("ManifestSpec"):
 		return &akashnetworkv2beta2.ManifestSpecApplyConfiguration{}
 	case v2beta2.SchemeGroupVersion.WithKind("ManifestStorageParams"):
@@ -92,6 +94,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &akashnetworkv2beta2.SchedulerResourceGPUApplyConfiguration{}
 	case v2beta2.SchemeGroupVersion.WithKind("SchedulerResources"):
 		return &akashnetworkv2beta2.SchedulerResourcesApplyConfiguration{}
+	case v2beta2.SchemeGroupVersion.WithKind("Volume"):
+		return &akashnetworkv2beta2.VolumeApplyConfiguration{}
+	case v2beta2.SchemeGroupVersion.WithKind("VolumeGroupID"):
+		return &akashnetworkv2beta2.VolumeGroupIDApplyConfiguration{}
+	case v2beta2.SchemeGroupVersion.WithKind("VolumeSpec"):
+		return &akashnetworkv2beta2.VolumeSpecApplyConfiguration{}
+	case v2beta2.SchemeGroupVersion.WithKind("VolumeStatus"):
+		return &akashnetworkv2beta2.VolumeStatusApplyConfiguration{}
 
 	}
 	return nil

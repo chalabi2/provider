@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta3"
+	manifest "pkg.akt.dev/go/manifest/v2beta4"
 	apclient "pkg.akt.dev/go/provider/client"
 	"pkg.akt.dev/go/testutil"
 	"pkg.akt.dev/go/util/pubsub"

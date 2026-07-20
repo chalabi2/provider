@@ -146,6 +146,17 @@ install_crd() {
     set -x
     kubectl apply -f "$CRD_FILE"
     kubectl apply -f "$rootdir/_docs/kustomize/storage/storageclass.yaml"
+
+    # AEP-87 two-provider e2e (kind only): repoint the local-path
+    # provisioner at the host-mounted storage directory so PV host paths
+    # resolve identically on the host and inside the node. The mount is
+    # declared in _run/kube/kind-config.yaml.
+    if kubectl -n local-path-storage get configmap local-path-config >/dev/null 2>&1; then
+        kubectl -n local-path-storage get configmap local-path-config -o yaml \
+            | sed 's|/var/local-path-provisioner|/tmp/akash-e2e-storage|g' \
+            | kubectl -n local-path-storage apply -f -
+        kubectl -n local-path-storage rollout restart deployment local-path-provisioner
+    fi
 }
 
 install_metrics() {

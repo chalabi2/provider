@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 
 	"github.com/akash-network/provider/cluster/kube/builder"
@@ -37,7 +37,14 @@ func cleanupStaleResources(ctx context.Context, kc kubernetes.Interface, lid mty
 		return err
 	}
 
-	selector := labels.NewSelector().Add(*req1).Add(*req2).Add(*req3).String()
+	// AEP-87 volume objects (attach PVCs, operator-created resources) are
+	// not manifest services; they must never match the stale selector.
+	req4, err := labels.NewRequirement(builder.AkashComponentLabelName, selection.NotIn, []string{builder.AkashComponentVolume})
+	if err != nil {
+		return err
+	}
+
+	selector := labels.NewSelector().Add(*req1).Add(*req2).Add(*req3).Add(*req4).String()
 
 	// delete stale deployments
 	if err := kc.AppsV1().Deployments(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{

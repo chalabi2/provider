@@ -3,13 +3,23 @@ package event
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
 
 // LeaseWon is the data structure that includes leaseID, group and price
 type LeaseWon struct {
+	LeaseID mtypes.LeaseID
+	Group   *dtypes.Group
+	Price   sdk.DecCoin
+}
+
+// VolumeLeaseWon is published when a lease on a storage-only (volume) group
+// is won (AEP-87). A volume lease has no manifest — the on-chain GroupSpec is
+// the whole contract — so it is handed to the volume provisioner rather than
+// the manifest machinery.
+type VolumeLeaseWon struct {
 	LeaseID mtypes.LeaseID
 	Group   *dtypes.Group
 	Price   sdk.DecCoin

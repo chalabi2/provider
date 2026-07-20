@@ -20,7 +20,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	atypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
@@ -42,7 +42,11 @@ import (
 
 var (
 	// errReservationNotFound is the new error with message "not found"
-	errReservationNotFound      = errors.New("reservation not found")
+	errReservationNotFound = errors.New("reservation not found")
+	// errReservationDurable reports an unreserve that was declined because
+	// the reservation is durable (AEP-87 volume) and allocated: the leased
+	// bytes outlive the lease and are released only on volume GC.
+	errReservationDurable       = errors.New("reservation is durable; released only on volume GC")
 	errInventoryNotAvailableYet = errors.New("inventory status not available yet")
 	errInventoryReservation     = errors.New("inventory error")
 	errNoLeasedIPsAvailable     = fmt.Errorf("%w: no leased IPs available", errInventoryReservation)
@@ -118,6 +122,7 @@ func newInventoryService(
 	client Client,
 	waiter waiter.OperatorWaiter,
 	deployments []ctypes.IDeployment,
+	volumes []ctypes.VolumeDeployment,
 ) (*inventoryService, error) {
 	sub, err := sub.Clone()
 	if err != nil {
@@ -143,10 +148,21 @@ func newInventoryService(
 	is.clients.inventory = cfromctx.ClientInventoryFromContext(ctx)
 	is.clients.ip = cfromctx.ClientIPFromContext(ctx)
 
-	reservations := make([]*reservation, 0, len(deployments))
+	reservations := make([]*reservation, 0, len(deployments)+len(volumes))
 	for _, d := range deployments {
 		res := newReservation(d.LeaseID().OrderID(), d.ManifestGroup())
 		res.SetClusterParams(d.ClusterParams())
+
+		reservations = append(reservations, res)
+	}
+
+	// AEP-87: durable (volume) reservations are rebuilt from Volume CRDs.
+	// They are marked allocated: their PVs already exist and are counted as
+	// allocated by the inventory operator's cluster state, so they must not
+	// be re-adjusted against reported capacity like pending reservations.
+	for _, v := range volumes {
+		res := newReservation(v.LeaseID.OrderID(), v.Group)
+		res.allocated = true
 
 		reservations = append(reservations, res)
 	}
@@ -278,6 +294,17 @@ func (is *inventoryService) statusV1(ctx context.Context) (*provider.Inventory, 
 }
 
 func (is *inventoryService) resourcesToCommit(rgroup dtypes.ResourceGroup) dtypes.ResourceGroup {
+	// AEP-87: a volume group's bid offer must EQUAL the order's storage
+	// quantity (the chain rejects anything else) and its zero compute legs
+	// must stay zero (ComputeCommittedResources clamps zero to one under
+	// overcommit), so commit levels do not apply — durable leased bytes are
+	// never thin-sold (StorageCommitLevel effectively pinned to 1.0). The
+	// resulting reservation carries ReservationKindDurable via
+	// newReservation.
+	if groupVolumePolicy(rgroup) != nil {
+		return rgroup
+	}
+
 	replacedResources := make(dtypes.ResourceUnits, 0)
 
 	for _, resource := range rgroup.GetResourceUnits() {
@@ -619,6 +646,19 @@ loop:
 			for idx, res := range state.reservations {
 				if !res.OrderID().Equals(req.order) {
 					continue
+				}
+
+				// AEP-87: an allocated durable (volume) reservation is
+				// exempt from unreserve-on-lease-close - the provider
+				// holds the bytes through retention/adoption and the
+				// capacity is released only on volume GC. A pending
+				// durable reservation (bid lost, never provisioned)
+				// unreserves normally.
+				if res.kind == ctypes.ReservationKindDurable && res.allocated {
+					is.log.Info("retaining durable reservation", "order", res.OrderID())
+					req.ch <- inventoryResponse{err: errReservationDurable}
+					inventoryRequestsCounter.WithLabelValues("unreserve", "retained-durable").Inc()
+					continue loop
 				}
 
 				is.log.Info("removing reservation", "order", res.OrderID())

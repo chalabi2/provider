@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/api/resource"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 
@@ -90,7 +90,9 @@ func NewNull(ctx context.Context, nodes ...string) NullClient {
 				VolumesAttached:  inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 				VolumesMounted:   inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 			},
-			Capabilities: inventoryV1.NodeCapabilities{},
+			Capabilities: inventoryV1.NodeCapabilities{
+				StorageClasses: []string{"beta2"},
+			},
 		}
 
 		cluster.Nodes = append(cluster.Nodes, nd)
@@ -113,7 +115,9 @@ func NewNull(ctx context.Context, nodes ...string) NullClient {
 				VolumesAttached:  inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 				VolumesMounted:   inventoryV1.NewResourcePair(0, 0, 0, resource.DecimalSI),
 			},
-			Capabilities: inventoryV1.NodeCapabilities{},
+			Capabilities: inventoryV1.NodeCapabilities{
+				StorageClasses: []string{"beta2"},
+			},
 		})
 	}
 

@@ -33,6 +33,7 @@ type AkashV2beta2Interface interface {
 	ManifestsGetter
 	ProviderHostsGetter
 	ProviderLeasedIPsGetter
+	VolumesGetter
 }
 
 // AkashV2beta2Client is used to interact with features provided by the akash.network group.
@@ -58,6 +59,10 @@ func (c *AkashV2beta2Client) ProviderHosts(namespace string) ProviderHostInterfa
 
 func (c *AkashV2beta2Client) ProviderLeasedIPs(namespace string) ProviderLeasedIPInterface {
 	return newProviderLeasedIPs(c, namespace)
+}
+
+func (c *AkashV2beta2Client) Volumes(namespace string) VolumeInterface {
+	return newVolumes(c, namespace)
 }
 
 // NewForConfig creates a new AkashV2beta2Client for the given config.

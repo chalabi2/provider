@@ -15,10 +15,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	atypes "pkg.akt.dev/go/node/audit/v1"
-	aclient "pkg.akt.dev/go/node/client/v1beta3"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	aclient "pkg.akt.dev/go/node/client/v1beta4"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 	metricsutils "pkg.akt.dev/go/util/metrics"
 	"pkg.akt.dev/go/util/pubsub"
@@ -61,6 +61,12 @@ type order struct {
 
 	// pass is the service for validating provider attributes and signatures
 	pass ProviderAttrSignatureService
+
+	// storage reports live per-class storage headroom for volume orders.
+	storage StorageInventory
+
+	// volumes answers local Volume CRD pre-checks; nil skips them.
+	volumes VolumeLookup
 }
 
 var (
@@ -125,6 +131,8 @@ func newOrderInternal(svc *service, oid mtypes.OrderID, cfg Config, pass Provide
 		lc:                         lifecycle.New(),
 		reservationFulfilledNotify: reservationFulfilledNotify, // Normally nil in production
 		pass:                       pass,
+		storage:                    svc.storageInv,
+		volumes:                    cfg.VolumeLookup,
 	}
 
 	// Shut down when parent begins shutting down
@@ -287,7 +295,18 @@ loop:
 				// TODO: sanity check (price, state, etc...)
 				o.log.Info("lease won", "lease", ev.ID)
 
-				if err := o.bus.Publish(event.LeaseWon{
+				if group != nil && group.GroupSpec.Volume != nil {
+					// storage-only lease: no manifest will ever arrive —
+					// the GroupSpec is the whole contract. Hand off to the
+					// volume provisioner instead of the manifest machinery.
+					if err := o.bus.Publish(event.VolumeLeaseWon{
+						LeaseID: ev.ID,
+						Group:   group,
+						Price:   ev.Price,
+					}); err != nil {
+						o.log.Error("failed to publish to event queue", err)
+					}
+				} else if err := o.bus.Publish(event.LeaseWon{
 					LeaseID: ev.ID,
 					Group:   group,
 					Price:   ev.Price,
@@ -342,7 +361,11 @@ loop:
 			group = &res
 
 			shouldBidCh = runner.Do(func() runner.Result {
-				return runner.NewResult(o.shouldBid(group))
+				// storage-only (volume) groups ride their own gate set
+				if group.GroupSpec.Volume != nil {
+					return runner.NewResult(o.shouldBidVolume(ctx, group))
+				}
+				return runner.NewResult(o.shouldBid(ctx, group))
 			})
 
 		case result := <-shouldBidCh:
@@ -521,7 +544,7 @@ loop:
 	}
 }
 
-func (o *order) shouldBid(group *dtypes.Group) (bool, error) {
+func (o *order) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error) {
 	// does provider have required attributes?
 	if !group.GroupSpec.MatchAttributes(o.session.Provider().Attributes) {
 		o.log.Debug("unable to fulfill: incompatible provider attributes")
@@ -551,39 +574,34 @@ func (o *order) shouldBid(group *dtypes.Group) (bool, error) {
 			return false, nil
 		}
 	}
-	signatureRequirements := group.GroupSpec.Requirements.SignedBy
-	if signatureRequirements.Size() != 0 {
-		// Check that the signature requirements are met for each attribute
-		var provAttr atypes.AuditedProviders
-		ownAttrs := atypes.AuditedProvider{
-			Owner:      o.session.Provider().Owner,
-			Auditor:    "",
-			Attributes: o.session.Provider().Attributes,
-		}
-		provAttr = append(provAttr, ownAttrs)
-		auditors := make([]string, 0)
-		auditors = append(auditors, group.GroupSpec.Requirements.SignedBy.AllOf...)
-		auditors = append(auditors, group.GroupSpec.Requirements.SignedBy.AnyOf...)
 
-		gotten := make(map[string]struct{})
-		for _, auditor := range auditors {
-			_, done := gotten[auditor]
-			if done {
-				continue
-			}
-			result, err := o.pass.GetAuditorAttributeSignatures(auditor)
-			if err != nil {
-				return false, err
-			}
-			provAttr = append(provAttr, result...)
-			gotten[auditor] = struct{}{}
-		}
+	// AEP-87 attach pre-check: every volume reference must match a locally
+	// Parked volume. Cheap local filter only — the chain gates attach bids
+	// to the colocated provider regardless, so no lookup wired means no
+	// filter.
+	if o.volumes != nil {
+		for _, resources := range group.GroupSpec.GetResourceUnits() {
+			for i := range resources.Volumes {
+				ref := resources.Volumes[i]
 
-		ok := group.GroupSpec.MatchRequirements(provAttr)
-		if !ok {
+				found, err := o.volumes.ParkedVolume(ctx, ref)
+				if err != nil {
+					return false, err
+				}
+
+				if !found {
+					o.log.Debug("unable to fulfill: volume reference not parked locally", "volume", ref.String())
+					return false, nil
+				}
+			}
+		}
+	}
+
+	if ok, err := o.matchSignatureRequirements(&group.GroupSpec); err != nil || !ok {
+		if err == nil {
 			o.log.Debug("attribute signature requirements not met")
-			return false, nil
 		}
+		return false, err
 	}
 
 	if err := group.GroupSpec.ValidateBasic(); err != nil {
@@ -592,4 +610,42 @@ func (o *order) shouldBid(group *dtypes.Group) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// matchSignatureRequirements checks the group's auditor signature
+// requirements against the provider's audited attributes. Shared by the
+// compute and volume shouldBid paths.
+func (o *order) matchSignatureRequirements(gspec *dtypes.GroupSpec) (bool, error) {
+	signatureRequirements := gspec.Requirements.SignedBy
+	if signatureRequirements.Size() == 0 {
+		return true, nil
+	}
+
+	// Check that the signature requirements are met for each attribute
+	var provAttr atypes.AuditedProviders
+	ownAttrs := atypes.AuditedProvider{
+		Owner:      o.session.Provider().Owner,
+		Auditor:    "",
+		Attributes: o.session.Provider().Attributes,
+	}
+	provAttr = append(provAttr, ownAttrs)
+	auditors := make([]string, 0)
+	auditors = append(auditors, gspec.Requirements.SignedBy.AllOf...)
+	auditors = append(auditors, gspec.Requirements.SignedBy.AnyOf...)
+
+	gotten := make(map[string]struct{})
+	for _, auditor := range auditors {
+		_, done := gotten[auditor]
+		if done {
+			continue
+		}
+		result, err := o.pass.GetAuditorAttributeSignatures(auditor)
+		if err != nil {
+			return false, err
+		}
+		provAttr = append(provAttr, result...)
+		gotten[auditor] = struct{}{}
+	}
+
+	return gspec.MatchRequirements(provAttr), nil
 }

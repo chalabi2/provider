@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"pkg.akt.dev/go/cli"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	sdktest "github.com/cosmos/cosmos-sdk/testutil"
 

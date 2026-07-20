@@ -6,7 +6,7 @@ package v1beta3
 
 import (
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/manifest/v2beta3"
+	"pkg.akt.dev/go/manifest/v2beta4"
 	"pkg.akt.dev/go/node/market/v1"
 )
 
@@ -128,19 +128,19 @@ func (_c *IDeployment_LeaseID_Call) RunAndReturn(run func() v1.LeaseID) *IDeploy
 }
 
 // ManifestGroup provides a mock function for the type IDeployment
-func (_mock *IDeployment) ManifestGroup() *v2beta3.Group {
+func (_mock *IDeployment) ManifestGroup() *v2beta4.Group {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for ManifestGroup")
 	}
 
-	var r0 *v2beta3.Group
-	if returnFunc, ok := ret.Get(0).(func() *v2beta3.Group); ok {
+	var r0 *v2beta4.Group
+	if returnFunc, ok := ret.Get(0).(func() *v2beta4.Group); ok {
 		r0 = returnFunc()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*v2beta3.Group)
+			r0 = ret.Get(0).(*v2beta4.Group)
 		}
 	}
 	return r0
@@ -163,12 +163,12 @@ func (_c *IDeployment_ManifestGroup_Call) Run(run func()) *IDeployment_ManifestG
 	return _c
 }
 
-func (_c *IDeployment_ManifestGroup_Call) Return(group *v2beta3.Group) *IDeployment_ManifestGroup_Call {
+func (_c *IDeployment_ManifestGroup_Call) Return(group *v2beta4.Group) *IDeployment_ManifestGroup_Call {
 	_c.Call.Return(group)
 	return _c
 }
 
-func (_c *IDeployment_ManifestGroup_Call) RunAndReturn(run func() *v2beta3.Group) *IDeployment_ManifestGroup_Call {
+func (_c *IDeployment_ManifestGroup_Call) RunAndReturn(run func() *v2beta4.Group) *IDeployment_ManifestGroup_Call {
 	_c.Call.Return(run)
 	return _c
 }

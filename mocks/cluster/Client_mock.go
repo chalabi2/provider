@@ -15,7 +15,9 @@ import (
 	mock "github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/tools/remotecommand"
-	"pkg.akt.dev/go/manifest/v2beta3"
+	"pkg.akt.dev/go/manifest/v2beta4"
+	v10 "pkg.akt.dev/go/node/deployment/v1"
+	"pkg.akt.dev/go/node/deployment/v1beta5"
 	"pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/provider/client"
 )
@@ -105,6 +107,69 @@ func (_c *Client_AllHostnames_Call) Return(activeHostnames []hostname.ActiveHost
 }
 
 func (_c *Client_AllHostnames_Call) RunAndReturn(run func(context1 context.Context) ([]hostname.ActiveHostname, error)) *Client_AllHostnames_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// AttachVolume provides a mock function for the type Client
+func (_mock *Client) AttachVolume(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef) error {
+	ret := _mock.Called(ctx, lid, ref)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AttachVolume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, v10.VolumeRef) error); ok {
+		r0 = returnFunc(ctx, lid, ref)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// Client_AttachVolume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AttachVolume'
+type Client_AttachVolume_Call struct {
+	*mock.Call
+}
+
+// AttachVolume is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lid v1.LeaseID
+//   - ref v10.VolumeRef
+func (_e *Client_Expecter) AttachVolume(ctx interface{}, lid interface{}, ref interface{}) *Client_AttachVolume_Call {
+	return &Client_AttachVolume_Call{Call: _e.mock.On("AttachVolume", ctx, lid, ref)}
+}
+
+func (_c *Client_AttachVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef)) *Client_AttachVolume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v1.LeaseID
+		if args[1] != nil {
+			arg1 = args[1].(v1.LeaseID)
+		}
+		var arg2 v10.VolumeRef
+		if args[2] != nil {
+			arg2 = args[2].(v10.VolumeRef)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_AttachVolume_Call) Return(err error) *Client_AttachVolume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *Client_AttachVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef) error) *Client_AttachVolume_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -242,7 +307,7 @@ func (_c *Client_DeclareHostname_Call) RunAndReturn(run func(ctx context.Context
 }
 
 // DeclareIP provides a mock function for the type Client
-func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool) error {
+func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool) error {
 	ret := _mock.Called(ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)
 
 	if len(ret) == 0 {
@@ -250,7 +315,7 @@ func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName 
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, uint32, v2beta3.ServiceProtocol, string, bool) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, uint32, v2beta4.ServiceProtocol, string, bool) error); ok {
 		r0 = returnFunc(ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)
 	} else {
 		r0 = ret.Error(0)
@@ -269,14 +334,14 @@ type Client_DeclareIP_Call struct {
 //   - serviceName string
 //   - port uint32
 //   - externalPort uint32
-//   - proto v2beta3.ServiceProtocol
+//   - proto v2beta4.ServiceProtocol
 //   - sharingKey string
 //   - overwrite bool
 func (_e *Client_Expecter) DeclareIP(ctx interface{}, lID interface{}, serviceName interface{}, port interface{}, externalPort interface{}, proto interface{}, sharingKey interface{}, overwrite interface{}) *Client_DeclareIP_Call {
 	return &Client_DeclareIP_Call{Call: _e.mock.On("DeclareIP", ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)}
 }
 
-func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool)) *Client_DeclareIP_Call {
+func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool)) *Client_DeclareIP_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -298,9 +363,9 @@ func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseI
 		if args[4] != nil {
 			arg4 = args[4].(uint32)
 		}
-		var arg5 v2beta3.ServiceProtocol
+		var arg5 v2beta4.ServiceProtocol
 		if args[5] != nil {
-			arg5 = args[5].(v2beta3.ServiceProtocol)
+			arg5 = args[5].(v2beta4.ServiceProtocol)
 		}
 		var arg6 string
 		if args[6] != nil {
@@ -329,7 +394,7 @@ func (_c *Client_DeclareIP_Call) Return(err error) *Client_DeclareIP_Call {
 	return _c
 }
 
-func (_c *Client_DeclareIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool) error) *Client_DeclareIP_Call {
+func (_c *Client_DeclareIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool) error) *Client_DeclareIP_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -387,6 +452,131 @@ func (_c *Client_Deploy_Call) Return(err error) *Client_Deploy_Call {
 }
 
 func (_c *Client_Deploy_Call) RunAndReturn(run func(ctx context.Context, deployment v1beta3.IDeployment) error) *Client_Deploy_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeployVolume provides a mock function for the type Client
+func (_mock *Client) DeployVolume(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group) error {
+	ret := _mock.Called(ctx, lid, group)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeployVolume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, *v1beta5.Group) error); ok {
+		r0 = returnFunc(ctx, lid, group)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// Client_DeployVolume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeployVolume'
+type Client_DeployVolume_Call struct {
+	*mock.Call
+}
+
+// DeployVolume is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lid v1.LeaseID
+//   - group *v1beta5.Group
+func (_e *Client_Expecter) DeployVolume(ctx interface{}, lid interface{}, group interface{}) *Client_DeployVolume_Call {
+	return &Client_DeployVolume_Call{Call: _e.mock.On("DeployVolume", ctx, lid, group)}
+}
+
+func (_c *Client_DeployVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group)) *Client_DeployVolume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v1.LeaseID
+		if args[1] != nil {
+			arg1 = args[1].(v1.LeaseID)
+		}
+		var arg2 *v1beta5.Group
+		if args[2] != nil {
+			arg2 = args[2].(*v1beta5.Group)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_DeployVolume_Call) Return(err error) *Client_DeployVolume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *Client_DeployVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group) error) *Client_DeployVolume_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeployedVolumes provides a mock function for the type Client
+func (_mock *Client) DeployedVolumes(ctx context.Context) ([]v1beta3.VolumeDeployment, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeployedVolumes")
+	}
+
+	var r0 []v1beta3.VolumeDeployment
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]v1beta3.VolumeDeployment, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []v1beta3.VolumeDeployment); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]v1beta3.VolumeDeployment)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// Client_DeployedVolumes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeployedVolumes'
+type Client_DeployedVolumes_Call struct {
+	*mock.Call
+}
+
+// DeployedVolumes is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *Client_Expecter) DeployedVolumes(ctx interface{}) *Client_DeployedVolumes_Call {
+	return &Client_DeployedVolumes_Call{Call: _e.mock.On("DeployedVolumes", ctx)}
+}
+
+func (_c *Client_DeployedVolumes_Call) Run(run func(ctx context.Context)) *Client_DeployedVolumes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_DeployedVolumes_Call) Return(volumeDeployments []v1beta3.VolumeDeployment, err error) *Client_DeployedVolumes_Call {
+	_c.Call.Return(volumeDeployments, err)
+	return _c
+}
+
+func (_c *Client_DeployedVolumes_Call) RunAndReturn(run func(ctx context.Context) ([]v1beta3.VolumeDeployment, error)) *Client_DeployedVolumes_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -449,6 +639,69 @@ func (_c *Client_Deployments_Call) Return(iDeployments []v1beta3.IDeployment, er
 }
 
 func (_c *Client_Deployments_Call) RunAndReturn(run func(context1 context.Context) ([]v1beta3.IDeployment, error)) *Client_Deployments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DetachVolume provides a mock function for the type Client
+func (_mock *Client) DetachVolume(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef) error {
+	ret := _mock.Called(ctx, lid, ref)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DetachVolume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, v10.VolumeRef) error); ok {
+		r0 = returnFunc(ctx, lid, ref)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// Client_DetachVolume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DetachVolume'
+type Client_DetachVolume_Call struct {
+	*mock.Call
+}
+
+// DetachVolume is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lid v1.LeaseID
+//   - ref v10.VolumeRef
+func (_e *Client_Expecter) DetachVolume(ctx interface{}, lid interface{}, ref interface{}) *Client_DetachVolume_Call {
+	return &Client_DetachVolume_Call{Call: _e.mock.On("DetachVolume", ctx, lid, ref)}
+}
+
+func (_c *Client_DetachVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef)) *Client_DetachVolume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v1.LeaseID
+		if args[1] != nil {
+			arg1 = args[1].(v1.LeaseID)
+		}
+		var arg2 v10.VolumeRef
+		if args[2] != nil {
+			arg2 = args[2].(v10.VolumeRef)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_DetachVolume_Call) Return(err error) *Client_DetachVolume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *Client_DetachVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID, ref v10.VolumeRef) error) *Client_DetachVolume_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1373,7 +1626,7 @@ func (_c *Client_PurgeDeclaredHostnames_Call) RunAndReturn(run func(ctx context.
 }
 
 // PurgeDeclaredIP provides a mock function for the type Client
-func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol) error {
+func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol) error {
 	ret := _mock.Called(ctx, lID, serviceName, externalPort, proto)
 
 	if len(ret) == 0 {
@@ -1381,7 +1634,7 @@ func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, servic
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, v2beta3.ServiceProtocol) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, v2beta4.ServiceProtocol) error); ok {
 		r0 = returnFunc(ctx, lID, serviceName, externalPort, proto)
 	} else {
 		r0 = ret.Error(0)
@@ -1399,12 +1652,12 @@ type Client_PurgeDeclaredIP_Call struct {
 //   - lID v1.LeaseID
 //   - serviceName string
 //   - externalPort uint32
-//   - proto v2beta3.ServiceProtocol
+//   - proto v2beta4.ServiceProtocol
 func (_e *Client_Expecter) PurgeDeclaredIP(ctx interface{}, lID interface{}, serviceName interface{}, externalPort interface{}, proto interface{}) *Client_PurgeDeclaredIP_Call {
 	return &Client_PurgeDeclaredIP_Call{Call: _e.mock.On("PurgeDeclaredIP", ctx, lID, serviceName, externalPort, proto)}
 }
 
-func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol)) *Client_PurgeDeclaredIP_Call {
+func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol)) *Client_PurgeDeclaredIP_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1422,9 +1675,9 @@ func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.
 		if args[3] != nil {
 			arg3 = args[3].(uint32)
 		}
-		var arg4 v2beta3.ServiceProtocol
+		var arg4 v2beta4.ServiceProtocol
 		if args[4] != nil {
-			arg4 = args[4].(v2beta3.ServiceProtocol)
+			arg4 = args[4].(v2beta4.ServiceProtocol)
 		}
 		run(
 			arg0,
@@ -1442,7 +1695,7 @@ func (_c *Client_PurgeDeclaredIP_Call) Return(err error) *Client_PurgeDeclaredIP
 	return _c
 }
 
-func (_c *Client_PurgeDeclaredIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol) error) *Client_PurgeDeclaredIP_Call {
+func (_c *Client_PurgeDeclaredIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol) error) *Client_PurgeDeclaredIP_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1700,6 +1953,131 @@ func (_c *Client_TeardownLease_Call) Return(err error) *Client_TeardownLease_Cal
 }
 
 func (_c *Client_TeardownLease_Call) RunAndReturn(run func(context1 context.Context, leaseID v1.LeaseID) error) *Client_TeardownLease_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// TeardownVolume provides a mock function for the type Client
+func (_mock *Client) TeardownVolume(ctx context.Context, lid v1.LeaseID) error {
+	ret := _mock.Called(ctx, lid)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TeardownVolume")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID) error); ok {
+		r0 = returnFunc(ctx, lid)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// Client_TeardownVolume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TeardownVolume'
+type Client_TeardownVolume_Call struct {
+	*mock.Call
+}
+
+// TeardownVolume is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lid v1.LeaseID
+func (_e *Client_Expecter) TeardownVolume(ctx interface{}, lid interface{}) *Client_TeardownVolume_Call {
+	return &Client_TeardownVolume_Call{Call: _e.mock.On("TeardownVolume", ctx, lid)}
+}
+
+func (_c *Client_TeardownVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID)) *Client_TeardownVolume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v1.LeaseID
+		if args[1] != nil {
+			arg1 = args[1].(v1.LeaseID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_TeardownVolume_Call) Return(err error) *Client_TeardownVolume_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *Client_TeardownVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID) error) *Client_TeardownVolume_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// VolumeStatus provides a mock function for the type Client
+func (_mock *Client) VolumeStatus(ctx context.Context, ref v10.VolumeRef) (*v2beta2.Volume, error) {
+	ret := _mock.Called(ctx, ref)
+
+	if len(ret) == 0 {
+		panic("no return value specified for VolumeStatus")
+	}
+
+	var r0 *v2beta2.Volume
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v10.VolumeRef) (*v2beta2.Volume, error)); ok {
+		return returnFunc(ctx, ref)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v10.VolumeRef) *v2beta2.Volume); ok {
+		r0 = returnFunc(ctx, ref)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*v2beta2.Volume)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, v10.VolumeRef) error); ok {
+		r1 = returnFunc(ctx, ref)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// Client_VolumeStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'VolumeStatus'
+type Client_VolumeStatus_Call struct {
+	*mock.Call
+}
+
+// VolumeStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ref v10.VolumeRef
+func (_e *Client_Expecter) VolumeStatus(ctx interface{}, ref interface{}) *Client_VolumeStatus_Call {
+	return &Client_VolumeStatus_Call{Call: _e.mock.On("VolumeStatus", ctx, ref)}
+}
+
+func (_c *Client_VolumeStatus_Call) Run(run func(ctx context.Context, ref v10.VolumeRef)) *Client_VolumeStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v10.VolumeRef
+		if args[1] != nil {
+			arg1 = args[1].(v10.VolumeRef)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_VolumeStatus_Call) Return(volume *v2beta2.Volume, err error) *Client_VolumeStatus_Call {
+	_c.Call.Return(volume, err)
+	return _c
+}
+
+func (_c *Client_VolumeStatus_Call) RunAndReturn(run func(ctx context.Context, ref v10.VolumeRef) (*v2beta2.Volume, error)) *Client_VolumeStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }

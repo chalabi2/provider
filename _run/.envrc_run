@@ -2,7 +2,9 @@ source_up .envrc
 
 AP_RUN_NAME=$(basename "$(pwd)")
 AP_RUN_DIR="${DEVCACHE_RUN}/${AP_RUN_NAME}"
-KUBECONFIG="${HOME}/.kube/config"
+# honor an already-exported KUBECONFIG so a second cluster can be driven off
+# an isolated kubeconfig without stealing the default file's current-context
+KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
 
 export AKASH_HOME="${AP_RUN_DIR}/.akash"
 export AP_RUN_NAME

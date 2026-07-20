@@ -16,4 +16,13 @@ type Config struct {
 	Attributes        atttypes.Attributes
 	MaxGroupVolumes   int
 	ReclamationWindow *time.Duration
+
+	// Volumes caps bidding on storage-only (volume) orders. The zero value
+	// (no classes) disables volume bidding.
+	Volumes VolumeConfig
+
+	// VolumeLookup answers local Volume CRD pre-checks for adoption and
+	// attach orders. Nil (the storage operator client not wired) skips the
+	// pre-checks; the chain gates remain authoritative.
+	VolumeLookup VolumeLookup
 }

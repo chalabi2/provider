@@ -8,7 +8,8 @@ KUBE_SSH_NODES           := kind
 KUSTOMIZE_INSTALLS ?= \
 	akash-operator-hostname \
 	akash-operator-inventory \
-	akash-operator-ip
+	akash-operator-ip \
+	akash-operator-storage
 
 include ../common.mk
 include ../common-commands.mk

@@ -10,6 +10,7 @@ import (
 
 	"cosmossdk.io/log"
 
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	"pkg.akt.dev/go/sdl"
 	sdlutil "pkg.akt.dev/go/sdl/util"
 
@@ -63,7 +64,12 @@ func NewWorkloadBuilder(
 		serviceIdx: serviceIdx,
 	}
 
-	res.volumesObjs = res.volumes()
+	volumeClaims, err := res.volumeClaims()
+	if err != nil {
+		return nil, err
+	}
+
+	res.volumesObjs = append(res.volumes(), volumeClaims...)
 	res.pvcsObjs = res.persistentVolumeClaims()
 	res.secretsRefs = res.imagePullSecrets()
 
@@ -223,6 +229,64 @@ func (b *Workload) volumes() []corev1.Volume {
 	return volumes
 }
 
+// volumeClaims returns pod volumes referencing pre-bound PVCs of AEP-87
+// first-class volumes. The claim name is the deterministic volume object
+// name (volume-<sha256(owner/vid)[:12]>): the storage operator creates the
+// PVC in the lease namespace with spec.volumeName pinned to the volume's
+// Retain PV before the workload schedules, so the DataSource seam in
+// persistentVolumeClaims is resolved by reference instead.
+func (b *Workload) volumeClaims() ([]corev1.Volume, error) {
+	service := &b.group.Services[b.serviceIdx]
+	if service.Params == nil {
+		return nil, nil
+	}
+
+	var volumes []corev1.Volume // nolint:prealloc
+
+	for _, params := range service.Params.Storage {
+		if params.Volume == "" {
+			continue
+		}
+
+		ref, err := dv1.ParseVolumeRef(params.Volume)
+		if err != nil {
+			return nil, fmt.Errorf("%w: service %s storage %s: %s", ErrKubeBuilder, service.Name, params.Name, err.Error())
+		}
+
+		volumes = append(volumes, corev1.Volume{
+			// matches the VolumeMount name in container()
+			Name: fmt.Sprintf("%s-%s", service.Name, params.Name),
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: crd.VolumeName(ref.Owner, ref.Name),
+					ReadOnly:  params.ReadOnly,
+				},
+			},
+		})
+	}
+
+	return volumes, nil
+}
+
+// hasVolumeRefs reports whether the service attaches AEP-87 first-class
+// volumes. Such services render as a Deployment with replicas forced to 1:
+// v1 volumes are RWO and StatefulSet VolumeClaimTemplates' positional
+// per-replica claims do not apply to a shared pre-bound PVC.
+func (b *Workload) hasVolumeRefs() bool {
+	service := &b.group.Services[b.serviceIdx]
+	if service.Params == nil {
+		return false
+	}
+
+	for _, params := range service.Params.Storage {
+		if params.Volume != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (b *Workload) persistentVolumeClaims() []corev1.PersistentVolumeClaim {
 	var pvcs []corev1.PersistentVolumeClaim // nolint:prealloc
 
@@ -283,6 +347,11 @@ func (b *Workload) runtimeClass() *string {
 func (b *Workload) replicas() *int32 {
 	replicas := new(int32)
 	*replicas = int32(b.deployment.ManifestGroup().Services[b.serviceIdx].Count) // nolint: gosec
+
+	// an attached first-class volume is RWO: exactly one pod may mount it
+	if b.hasVolumeRefs() {
+		*replicas = 1
+	}
 
 	return replicas
 }

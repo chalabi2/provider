@@ -26,7 +26,7 @@ import (
 
 	"pkg.akt.dev/go/grpc/gogoreflection"
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
@@ -79,6 +79,10 @@ func (r *testReservation) GetAllocatedResources() dvbeta.ResourceUnits {
 
 func (r *testReservation) Allocated() bool {
 	return false
+}
+
+func (r *testReservation) Kind() ctypes.ReservationKind {
+	return ctypes.ReservationKindLease
 }
 
 func (r *testReservation) SetClusterParams(val interface{}) {

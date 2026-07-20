@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 	kubehostname "github.com/akash-network/provider/cluster/kube/operators/clients/hostname"
 	kubeinventory "github.com/akash-network/provider/cluster/kube/operators/clients/inventory"
 	kubeip "github.com/akash-network/provider/cluster/kube/operators/clients/ip"
+	kubestorage "github.com/akash-network/provider/cluster/kube/operators/clients/storage"
 	cip "github.com/akash-network/provider/cluster/types/v1beta3/clients/ip"
 	clfromctx "github.com/akash-network/provider/cluster/types/v1beta3/fromctx"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
@@ -94,6 +96,14 @@ const (
 	FlagDeploymentRuntimeClass           = "deployment-runtime-class"
 	FlagBidTimeout                       = "bid-timeout"
 	FlagReclamationWindow                = "reclamation-window"
+	FlagVolumeClasses                    = "volume-classes"
+	FlagVolumeMaxSize                    = "volume-max-size"
+	FlagVolumeMaxRetention               = "volume-max-retention"
+	FlagVolumeMaxReplicas                = "volume-max-replicas"
+	FlagVolumeReplicationDriver          = "volume-replication-driver"
+	FlagVolumeReplicationRookNS          = "volume-replication-rook-namespace"
+	FlagVolumeReplicationDir             = "volume-replication-dir"
+	FlagVolumeReplicaSyncInterval        = "volume-replica-sync-interval"
 	FlagManifestTimeout                  = "manifest-timeout"
 	FlagMetricsListener                  = "metrics-listener"
 	FlagWithdrawalPeriod                 = "withdrawal-period"
@@ -135,7 +145,13 @@ const (
 const (
 	serviceIPOperator       = "ip-operator"
 	serviceHostnameOperator = "hostname-operator"
+	serviceStorageOperator  = "storage-operator"
 )
+
+// attrStorageVolumes is the capability a provider advertises to take part
+// in the AEP-87 volume market; the SDL injects the same key into volume
+// order placement requirements.
+const attrStorageVolumes = "capabilities/storage/volumes"
 
 var (
 	errInvalidConfig = errors.New("invalid configuration")
@@ -666,6 +682,13 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	if reclamationWindow > 0 {
 		config.ReclamationWindow = &reclamationWindow
 	}
+
+	config.Volumes = bidengine.VolumeConfig{
+		Classes:      viper.GetStringSlice(FlagVolumeClasses),
+		MaxSize:      viper.GetUint64(FlagVolumeMaxSize),
+		MaxRetention: viper.GetDuration(FlagVolumeMaxRetention),
+		MaxReplicas:  viper.GetUint32(FlagVolumeMaxReplicas),
+	}
 	config.MonitorMaxRetries = monitorMaxRetries
 	config.MonitorRetryPeriod = monitorRetryPeriod
 	config.MonitorRetryPeriodJitter = monitorRetryPeriodJitter
@@ -742,6 +765,25 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		ctx = context.WithValue(ctx, clfromctx.CtxKeyClientIP, ipOperatorClient)
 	}
 
+	// The storage operator is mandatory only for volume-market participants:
+	// providers advertising capabilities/storage/volumes (or with volume
+	// classes configured) gate startup on it; everyone else has no
+	// chart-before-daemon ordering constraint.
+	if volumesEnabled(config) {
+		endpoint, err := providerflags.GetServiceEndpointFlagValue(logger, serviceStorageOperator)
+		if err != nil {
+			return err
+		}
+
+		storageOperatorClient, err := kubestorage.NewClient(ctx, logger, endpoint)
+		if err != nil {
+			return err
+		}
+
+		waitClients = append(waitClients, storageOperatorClient)
+		ctx = context.WithValue(ctx, clfromctx.CtxKeyClientStorage, storageOperatorClient)
+	}
+
 	operatorWaiter := waiter.NewOperatorWaiter(ctx, logger, waitClients...)
 
 	service, err := provider.NewService(ctx, cctx, cctx.FromAddress, sessionMgr, bus, cclient, operatorWaiter, config)
@@ -787,12 +829,30 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service)
+	var gwgrpcOpts []gwgrpc.ServerOption
+
+	// the VolumeTransfer data plane is served only by volume-market
+	// participants; everyone else exposes no transfer endpoint
+	if volumesEnabled(config) {
+		transferSrv, err := buildVolumeTransferServer(ctx, cl.Query(), cctx.FromAddress.String(), logger)
+		if err != nil {
+			return err
+		}
+
+		gwgrpcOpts = append(gwgrpcOpts, gwgrpc.WithVolumeTransfer(transferSrv))
+	}
+
+	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service, gwgrpcOpts...)
 	if err != nil {
 		return err
 	}
 
-	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli", bus)
+	// the subscriber id must be unique per daemon instance: co-resident
+	// providers sharing one RPC client (the integration harness's local
+	// client, or any embedded node) otherwise contend for one event-bus
+	// subscription and the loser goes silently deaf
+	evtSvc, err := events.NewEvents(ctx, cctx.Client, "provider-cli-"+cctx.FromAddress.String(), bus,
+		events.WithLogger(logger.With("cmp", "chain-events")))
 	if err != nil {
 		return err
 	}
@@ -844,6 +904,22 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// volumesEnabled reports whether the provider participates in the AEP-87
+// volume market: either the capability is advertised in its attributes or
+// volume classes are configured for bidding.
+func volumesEnabled(config provider.Config) bool {
+	if len(config.Volumes.Classes) > 0 {
+		return true
+	}
+
+	if val, set := config.Attributes.Find(attrStorageVolumes).AsString(); set {
+		enabled, _ := strconv.ParseBool(val)
+		return enabled
+	}
+
+	return false
 }
 
 func runMigrationsOnStartup(ctx context.Context, cmd *cobra.Command, logger log.Logger) error {

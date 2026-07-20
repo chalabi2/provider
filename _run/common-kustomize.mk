@@ -5,6 +5,7 @@ KUSTOMIZE_AKASH                := $(KUSTOMIZE_DIR)/akash-node
 KUSTOMIZE_OPERATOR_HOSTNAME    := $(KUSTOMIZE_DIR)/akash-operator-hostname
 KUSTOMIZE_OPERATOR_INVENTORY   := $(KUSTOMIZE_DIR)/akash-operator-inventory
 KUSTOMIZE_OPERATOR_IP          := $(KUSTOMIZE_DIR)/akash-operator-ip
+KUSTOMIZE_OPERATOR_STORAGE     := $(KUSTOMIZE_DIR)/akash-operator-storage
 
 CLIENT_EXPORT_PASSWORD         ?= 12345678
 
@@ -70,6 +71,17 @@ kustomize-configure-akash-operator-ip: akash-init
 
 .PHONY: kustomize-configure-akash-operator-inventory
 kustomize-configure-configure-operator-inventory:
+
+# the in-cluster storage operator reaches the chain through the akash-node
+# service; override for topologies where the node runs elsewhere
+KUSTOMIZE_STORAGE_NODE         ?= http://akash-node:26657
+
+.PHONY: kustomize-configure-akash-operator-storage
+kustomize-configure-akash-operator-storage: akash-init
+	( \
+		echo "provider-address=$(PROVIDER_ADDRESS)" ; \
+		echo "node=$(KUSTOMIZE_STORAGE_NODE)"         \
+	) > "$(KUSTOMIZE_OPERATOR_STORAGE)/configmap.yaml"
 
 #### Kustomize installations
 .PHONY: kustomize-deploy-services

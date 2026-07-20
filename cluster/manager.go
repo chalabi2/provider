@@ -15,9 +15,10 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/log"
 
-	mani "pkg.akt.dev/go/manifest/v2beta3"
+	mani "pkg.akt.dev/go/manifest/v2beta4"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	"pkg.akt.dev/go/util/pubsub"
 
 	kubeclienterrors "github.com/akash-network/provider/cluster/kube/errors"
@@ -382,6 +383,32 @@ func (dm *deploymentManager) doDeploy(pctx context.Context) ([]string, []string,
 	// Don't use a context tied to the lifecycle, as we don't want to cancel Kubernetes operations
 	deployCtx := fromctx.ApplyToContext(context.Background(), dm.config.ClusterSettings)
 
+	// attach AEP-87 volumes before the workload lands: marking the Volume
+	// CRD Attached is what triggers the storage operator's claimRef
+	// choreography (target PVC in the lease namespace), and the pod cannot
+	// schedule until that PVC exists. The daemon drives this directly —
+	// the operator's chain-event watch is a healing backstop, not the
+	// primary path.
+	for _, svc := range dm.deployment.ManifestGroup().Services {
+		if svc.Params == nil {
+			continue
+		}
+		for _, sp := range svc.Params.Storage {
+			if sp.Volume == "" {
+				continue
+			}
+			ref, refErr := dv1.ParseVolumeRef(sp.Volume)
+			if refErr != nil {
+				dm.log.Error("parsing volume ref", "service", svc.Name, "storage", sp.Name, "err", refErr.Error())
+				return nil, nil, refErr
+			}
+			if attachErr := dm.client.AttachVolume(deployCtx, dm.deployment.LeaseID(), ref); attachErr != nil {
+				dm.log.Error("attaching volume", "service", svc.Name, "volume", sp.Volume, "err", attachErr.Error())
+				return nil, nil, attachErr
+			}
+		}
+	}
+
 	err = dm.client.Deploy(deployCtx, dm.deployment)
 	label := "success"
 	if err != nil {
@@ -499,7 +526,7 @@ func (dm *deploymentManager) getCleanupRetryOpts(ctx context.Context) []retry.Op
 }
 
 func (dm *deploymentManager) doTeardown(ctx context.Context) error {
-	const teardownActivityCount = 3
+	const teardownActivityCount = 4
 	teardownResults := make(chan error, teardownActivityCount)
 
 	go func() {
@@ -516,6 +543,38 @@ func (dm *deploymentManager) doTeardown(ctx context.Context) error {
 			label = "fail"
 		}
 		deploymentCounter.WithLabelValues("teardown", label).Inc()
+		teardownResults <- result
+	}()
+
+	go func() {
+		// detach AEP-87 volumes so the storage operator re-parks the Retain
+		// PV: symmetric to the attach the deploy path drives. Missing CRDs
+		// are tolerated (DetachVolume treats not-found as done).
+		result := retry.Do(func() error {
+			for _, svc := range dm.deployment.ManifestGroup().Services {
+				if svc.Params == nil {
+					continue
+				}
+				for _, sp := range svc.Params.Storage {
+					if sp.Volume == "" {
+						continue
+					}
+					ref, refErr := dv1.ParseVolumeRef(sp.Volume)
+					if refErr != nil {
+						return refErr
+					}
+					if detachErr := dm.client.DetachVolume(ctx, dm.deployment.LeaseID(), ref); detachErr != nil {
+						dm.log.Error("detaching volume", "volume", sp.Volume, "err", detachErr.Error())
+						return detachErr
+					}
+				}
+			}
+			return nil
+		}, dm.getCleanupRetryOpts(ctx)...)
+
+		if result == nil {
+			dm.log.Debug("detached volumes")
+		}
 		teardownResults <- result
 	}()
 

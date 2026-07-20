@@ -23,6 +23,12 @@ func (s *clusterState) run() error {
 
 	storage := make(map[string]inventory.ClusterStorage)
 
+	// volumeOverlay holds the volumes driver's allocated-only entries; they
+	// are merged INTO the capacity drivers' classes rather than appended, so
+	// parked/retained AEP-87 volumes (whose PVs live on the non-sellable
+	// -retain class twin) count against the base class headroom.
+	var volumeOverlay inventory.ClusterStorage
+
 	state := inventory.Cluster{}
 	signalch := make(chan struct{}, 1)
 
@@ -51,7 +57,11 @@ func (s *clusterState) run() error {
 				state.Nodes = obj
 				trySignal()
 			case storageSignal:
-				storage[obj.driver] = obj.storage
+				if obj.driver == driverVolumes {
+					volumeOverlay = obj.storage
+				} else {
+					storage[obj.driver] = obj.storage
+				}
 
 				prealloc := 0
 				for _, drv := range storage {
@@ -67,6 +77,22 @@ func (s *clusterState) run() error {
 						}
 
 						state.Storage = append(state.Storage, class)
+					}
+				}
+
+				for _, vol := range volumeOverlay {
+					for i := range state.Storage {
+						if state.Storage[i].Info.Class != vol.Info.Class {
+							continue
+						}
+
+						// duplicate before mutating: the entry shares its
+						// quantity pointers with the driver's retained slice
+						entry := state.Storage[i].Dup()
+						entry.Quantity.Allocated.Add(*vol.Quantity.Allocated)
+						state.Storage[i] = entry
+
+						break
 					}
 				}
 

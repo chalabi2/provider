@@ -23,7 +23,8 @@ import (
 	sdkmath "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/node/types/unit"
@@ -948,5 +949,98 @@ func Test_newDataForScript_GPUWildcard(t *testing.T) {
 			d := newDataForScript(c.r)
 			assert.NotEmpty(t, d)
 		})
+	}
+}
+
+func Test_ScalePricingOnVolumeGroup(t *testing.T) {
+	storageScale := Storage{
+		testVolumeClass: decimal.NewFromInt(1),
+	}
+
+	pricing, err := MakeScalePricing(decimal.Zero, decimal.Zero, storageScale, decimal.Zero, decimal.Zero)
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+
+	gspec := volumeGroupSpec()
+	req := Request{
+		GSpec: &gspec,
+	}
+
+	price, err := pricing.CalculatePrice(context.Background(), req)
+	require.NoError(t, err)
+
+	// zero compute terms contribute nothing; the price is the per-class
+	// storage scale over the volume size in mebibytes
+	expected := sdkmath.LegacyNewDec(testVolumeSize / unit.Mi)
+	require.Equal(t, expected, price.Amount)
+	require.Equal(t, sdkutil.DenomUact, price.Denom)
+}
+
+func Test_ScalePricingVolumeGroupRequiresClassScale(t *testing.T) {
+	storageScale := Storage{
+		"beta3": decimal.NewFromInt(1),
+	}
+
+	pricing, err := MakeScalePricing(decimal.Zero, decimal.Zero, storageScale, decimal.Zero, decimal.Zero)
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+
+	gspec := volumeGroupSpec()
+	req := Request{
+		GSpec: &gspec,
+	}
+
+	// unknown class = no bid, as today
+	_, err = pricing.CalculatePrice(context.Background(), req)
+	require.ErrorIs(t, err, errNoPriceScaleForStorageClass)
+}
+
+func Test_ShellScriptDataForVolumeGroup(t *testing.T) {
+	gspec := volumeGroupSpec()
+	gspec.Volume.MaxReplicas = 2
+
+	d := newDataForScript(Request{GSpec: &gspec})
+
+	require.Len(t, d.Resources, 1)
+	require.Len(t, d.Resources[0].Storage, 1)
+
+	se := d.Resources[0].Storage[0]
+	require.Equal(t, testVolumeClass, se.Class)
+	require.Equal(t, uint64(testVolumeSize), se.Size)
+	require.True(t, se.Volume)
+	require.Equal(t, uint64(24), se.RetentionHours)
+	require.Equal(t, uint32(2), se.MaxReplicas)
+	require.False(t, se.Replica)
+
+	// zero compute terms ride along untouched
+	require.Equal(t, uint64(0), d.Resources[0].CPU)
+	require.Equal(t, uint64(0), d.Resources[0].Memory)
+}
+
+func Test_ShellScriptDataForReplicaVolumeGroup(t *testing.T) {
+	gspec := volumeGroupSpec()
+	gspec.Volume.ReplicaOf = &dv1.VolumeRef{
+		Owner: testutil.AccAddress(t).String(),
+		DSeq:  5,
+		GSeq:  1,
+		Name:  "data",
+	}
+
+	d := newDataForScript(Request{GSpec: &gspec})
+
+	require.Len(t, d.Resources, 1)
+	require.True(t, d.Resources[0].Storage[0].Replica)
+}
+
+func Test_ShellScriptDataForComputeGroupHasNoVolumeTerms(t *testing.T) {
+	d := newDataForScript(Request{GSpec: defaultGroupSpec()})
+
+	for _, res := range d.Resources {
+		for _, se := range res.Storage {
+			require.False(t, se.Volume)
+			require.Zero(t, se.RetentionHours)
+			require.Zero(t, se.MaxReplicas)
+			require.False(t, se.Replica)
+		}
 	}
 }

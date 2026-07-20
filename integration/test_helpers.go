@@ -33,6 +33,12 @@ attributes:
     value: false
   - key: capabilities/storage/3/class
     value: ram
+  - key: capabilities/storage/4/persistent
+    value: true
+  - key: capabilities/storage/4/class
+    value: beta3
+  - key: capabilities/storage/volumes
+    value: true
 `
 )
 
@@ -72,11 +78,18 @@ func queryAppWithRetries(t *testing.T, appURL string, appHost string, limit int,
 		o(opt)
 	}
 
-	req, err := http.NewRequest("GET", appURL, opt.body)
-	require.NoError(t, err)
-	req.Host = appHost
-	req.Header.Add("Cache-Control", "no-cache")
-	req.Header.Add("Connection", "keep-alive")
+	// the body must be rebuilt per attempt: a single *bytes.Buffer is
+	// drained by the first Do, and every retry after a non-200 would send
+	// "ContentLength=N with Body length 0".
+	bodyBytes := opt.body.Bytes()
+	newReq := func() *http.Request {
+		req, err := http.NewRequest("GET", appURL, bytes.NewReader(bodyBytes))
+		require.NoError(t, err)
+		req.Host = appHost
+		req.Header.Add("Cache-Control", "no-cache")
+		req.Header.Add("Connection", "keep-alive")
+		return req
+	}
 	tr := &http.Transport{
 		DisableKeepAlives: false,
 		DialContext: (&net.Dialer{
@@ -90,9 +103,10 @@ func queryAppWithRetries(t *testing.T, appURL string, appHost string, limit int,
 	}
 
 	var resp *http.Response
+	var err error
 	const delay = 1 * time.Second
 	for i := 0; i != limit; i++ {
-		resp, err = httpClient.Do(req)
+		resp, err = httpClient.Do(newReq())
 		if resp != nil {
 			t.Log("GET: ", appURL, resp.StatusCode)
 		}
