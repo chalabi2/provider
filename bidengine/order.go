@@ -342,7 +342,7 @@ loop:
 			group = &res
 
 			shouldBidCh = runner.Do(func() runner.Result {
-				return runner.NewResult(o.shouldBid(group))
+				return runner.NewResult(o.shouldBid(ctx, group))
 			})
 
 		case result := <-shouldBidCh:
@@ -520,7 +520,7 @@ loop:
 	}
 }
 
-func (o *order) shouldBid(group *dtypes.Group) (bool, error) {
+func (o *order) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error) {
 	// does provider have required attributes?
 	if !group.GroupSpec.MatchAttributes(o.session.Provider().Attributes) {
 		o.log.Debug("unable to fulfill: incompatible provider attributes")
@@ -585,7 +585,7 @@ func (o *order) shouldBid(group *dtypes.Group) (bool, error) {
 		}
 	}
 
-	if !o.shouldBidVerificationPreflight(context.Background(), group.GroupSpec.Requirements.Verification) {
+	if !o.shouldBidVerificationPreflight(ctx, group.GroupSpec.Requirements.Verification) {
 		return false, nil
 	}
 

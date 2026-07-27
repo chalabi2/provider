@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	clientmocks "pkg.akt.dev/go/mocks/node/client"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/testutil"
@@ -370,6 +371,26 @@ func TestShouldBidVerificationPreflightUsesQueriedData(t *testing.T) {
 	}))
 }
 
+func TestShouldBidPassesContextToVerificationPreflight(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	query := &verificationPreflightQueryClient{
+		paramsErr: errors.New("params failed"),
+	}
+	o := newVerificationPreflightTestOrder(t, query)
+	o.pass = nullProviderAttrSignatureService{}
+
+	group := &dtypes.Group{}
+	group.GroupSpec.Requirements.Verification = &vtypes.VerificationRequirement{
+		MinTier: vtypes.TierIdentified,
+	}
+
+	_, _ = o.shouldBid(ctx, group)
+	require.NotNil(t, query.paramsContext)
+	require.ErrorIs(t, query.paramsContext.Err(), context.Canceled)
+}
+
 type verificationPreflightTestQueryClient struct {
 	bidengineTestQueryClient
 	verification vtypes.QueryClient
@@ -388,12 +409,14 @@ type verificationPreflightQueryClient struct {
 	attestationsErr  error
 	graceResp        *vtypes.QueryProviderVerificationGraceResponse
 	graceErr         error
+	paramsContext    context.Context
 
 	attestationsCalls int
 	graceCalls        int
 }
 
-func (client *verificationPreflightQueryClient) Params(context.Context, *vtypes.QueryParamsRequest, ...grpc.CallOption) (*vtypes.QueryParamsResponse, error) {
+func (client *verificationPreflightQueryClient) Params(ctx context.Context, _ *vtypes.QueryParamsRequest, _ ...grpc.CallOption) (*vtypes.QueryParamsResponse, error) {
+	client.paramsContext = ctx
 	return client.paramsResp, client.paramsErr
 }
 
