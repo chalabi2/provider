@@ -27,6 +27,7 @@ import (
 	gwutils "github.com/akash-network/provider/gateway/utils"
 	"github.com/akash-network/provider/tools/fromctx"
 	ptypes "github.com/akash-network/provider/types"
+	"github.com/akash-network/provider/verification/inventory"
 )
 
 type ContextKey string
@@ -59,7 +60,14 @@ func ClaimsFromCtx(ctx context.Context) *ajwt.Claims {
 	return val.(*ajwt.Claims)
 }
 
-func NewServer(ctx context.Context, endpoint string, cquery gwutils.CertGetter, client provider.Client, snapshotter InventorySnapshotter) error {
+func NewServer(
+	ctx context.Context,
+	endpoint string,
+	cquery gwutils.CertGetter,
+	client provider.Client,
+	snapshotter InventorySnapshotter,
+	committedSnapshots inventory.CommittedSnapshotReader,
+) error {
 	tlsCfg, err := gwutils.NewServerTLSConfig(ctx, cquery, endpoint)
 	if err != nil {
 		return err
@@ -89,9 +97,10 @@ func NewServer(ctx context.Context, endpoint string, cquery gwutils.CertGetter, 
 	}
 	leasev1.RegisterLeaseRPCServer(grpcSrv, leaseRPC)
 
-	if snapshotter != nil {
+	if snapshotter != nil || committedSnapshots != nil {
 		inventoryv1.RegisterInventoryServiceServer(grpcSrv, &grpcInventoryV1{
-			snapshotter: snapshotter,
+			snapshotter:        snapshotter,
+			committedSnapshots: committedSnapshots,
 		})
 	}
 	gogoreflection.Register(grpcSrv)
