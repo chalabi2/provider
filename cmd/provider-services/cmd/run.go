@@ -67,6 +67,8 @@ import (
 	"github.com/akash-network/provider/tools/pconfig"
 	"github.com/akash-network/provider/tools/pconfig/bbolt"
 	"github.com/akash-network/provider/tools/pconfig/memory"
+	aepinventory "github.com/akash-network/provider/verification/inventory"
+	"github.com/akash-network/provider/version"
 )
 
 const (
@@ -786,6 +788,29 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 	ctx = context.WithValue(ctx, fromctx.CtxKeyAccountQuerier, accQuerier)
 
+	snapshotMaterial, err := aepinventory.NewClusterMaterialSource(aepinventory.ClusterMaterialSourceConfig{
+		Status:          service.ClusterService(),
+		SoftwareVersion: version.Version,
+	})
+	if err != nil {
+		return err
+	}
+
+	snapshotPayload, err := aepinventory.NewMaterialPayloadSource(aepinventory.MaterialPayloadSourceConfig{
+		Source:   snapshotMaterial,
+		Provider: config.ProviderSigner.Address().String(),
+		ChainID:  cctx.ChainID,
+		Now:      time.Now,
+	})
+	if err != nil {
+		return err
+	}
+
+	snapshotter, err := aepinventory.NewBuilder(snapshotPayload, config.ProviderSigner)
+	if err != nil {
+		return err
+	}
+
 	gwRest, err := gwrest.NewServer(
 		ctx,
 		logger,
@@ -800,7 +825,7 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service)
+	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service, snapshotter)
 	if err != nil {
 		return err
 	}
