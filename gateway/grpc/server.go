@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -130,13 +129,9 @@ func authInterceptor(serverCtx context.Context) grpc.UnaryServerInterceptor {
 		}
 
 		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			tokens := md["authorization"]
-			if len(tokens) > 0 {
-				tokString = tokens[0]
-				// Strip "Bearer " prefix to match REST auth extraction.
-				if parts := strings.Fields(tokString); len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
-					tokString = parts[1]
-				}
+			tokString, err = gwutils.AuthHeaderToken(md.Get("authorization"))
+			if err != nil {
+				return nil, err
 			}
 		}
 
