@@ -12,6 +12,7 @@ import (
 	"github.com/akash-network/provider/bidengine"
 	"github.com/akash-network/provider/cluster"
 	"github.com/akash-network/provider/manifest"
+	ptypes "github.com/akash-network/provider/types"
 )
 
 type Config struct {
@@ -28,6 +29,7 @@ type Config struct {
 	RPCQueryTimeout          time.Duration
 	CachedResultMaxAge       time.Duration
 	ReclamationWindow        *time.Duration
+	ProviderSigner           ptypes.ProviderSigner
 	cluster.Config
 }
 
