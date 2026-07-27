@@ -34,7 +34,7 @@ func TestGetInventorySnapshotBuildsResponse(t *testing.T) {
 	snapshotter := &testInventorySnapshotter{
 		snapshot: &inventory.Snapshot{
 			Payload:   []byte("payload"),
-			Hash:      []byte("hash"),
+			Hash:      inventory.HashPayload([]byte("payload")),
 			Signature: []byte("signature"),
 			Provider:  "akash1provider",
 		},
@@ -77,7 +77,7 @@ func TestGetInventorySnapshotAcceptsMissingNonce(t *testing.T) {
 	snapshotter := &testInventorySnapshotter{
 		snapshot: &inventory.Snapshot{
 			Payload:   []byte("payload"),
-			Hash:      []byte("hash"),
+			Hash:      inventory.HashPayload([]byte("payload")),
 			Signature: []byte("signature"),
 			Provider:  "akash1provider",
 		},

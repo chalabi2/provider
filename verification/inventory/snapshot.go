@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -20,6 +21,7 @@ var (
 	errMissingSnapshot      = errors.New("missing inventory snapshot")
 	errMissingPayload       = errors.New("missing inventory snapshot payload")
 	errMissingHash          = errors.New("missing inventory snapshot hash")
+	errInvalidHash          = errors.New("invalid inventory snapshot hash")
 	errMissingSignature     = errors.New("missing inventory snapshot signature")
 	errMissingProvider      = errors.New("missing inventory snapshot provider")
 )
@@ -157,6 +159,9 @@ func ValidateSnapshot(snapshot *Snapshot) error {
 
 	if len(snapshot.Hash) == 0 {
 		return errMissingHash
+	}
+	if len(snapshot.Hash) != sha256.Size || !bytes.Equal(snapshot.Hash, HashPayload(snapshot.Payload)) {
+		return errInvalidHash
 	}
 
 	if len(snapshot.Signature) == 0 {

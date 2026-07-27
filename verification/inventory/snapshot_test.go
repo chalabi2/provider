@@ -190,7 +190,7 @@ func TestBuilderBuild(t *testing.T) {
 func TestValidateSnapshot(t *testing.T) {
 	valid := &Snapshot{
 		Payload:   []byte("payload"),
-		Hash:      []byte("hash"),
+		Hash:      HashPayload([]byte("payload")),
 		Signature: []byte("signature"),
 		Provider:  "akash1provider",
 	}
@@ -225,6 +225,16 @@ func TestValidateSnapshot(t *testing.T) {
 				Provider:  valid.Provider,
 			},
 			wantErr: errMissingHash,
+		},
+		{
+			name: "invalid hash",
+			snapshot: &Snapshot{
+				Payload:   valid.Payload,
+				Hash:      bytes.Repeat([]byte{1}, sha256.Size),
+				Signature: valid.Signature,
+				Provider:  valid.Provider,
+			},
+			wantErr: errInvalidHash,
 		},
 		{
 			name: "missing signature",
