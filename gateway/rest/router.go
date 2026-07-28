@@ -121,7 +121,7 @@ func newRouter(log log.Logger, addr sdk.Address, pclient provider.Client, ctxCon
 	// GET /status
 	// provider status endpoint does not require authentication
 	router.HandleFunc("/status",
-		createStatusHandler(log, pclient, addr)).
+		createStatusHandler(log, pclient, addr, verificationInventoryStatusSourceFromConfig(ctxConfig))).
 		Methods("GET")
 
 	authedRouter := router.NewRoute().Subrouter()
@@ -447,7 +447,12 @@ func createVersionHandler(log log.Logger, pclient provider.Client) http.HandlerF
 	}
 }
 
-func createStatusHandler(log log.Logger, sclient provider.StatusClient, providerAddr sdk.Address) http.HandlerFunc {
+func createStatusHandler(
+	log log.Logger,
+	sclient provider.StatusClient,
+	providerAddr sdk.Address,
+	verificationInventory verificationInventoryStatusSource,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		status, err := sclient.Status(req.Context())
 		if err != nil {
@@ -463,16 +468,22 @@ func createStatusHandler(log log.Logger, sclient provider.StatusClient, provider
 			inventory := statusV1.Cluster.GetInventory()
 			leasedIP = inventory.GetLeasedIP()
 		}
+		verificationStatus, err := latestVerificationInventoryStatus(req.Context(), verificationInventory)
+		if err != nil {
+			log.Error("failed to fetch verification inventory status", "err", err)
+		}
 
 		data := struct {
 			// provider.Status
 			apclient.ProviderStatus
-			Address  string                   `json:"address"`
-			LeasedIP inventoryV1.ResourcePair `json:"leased_ip"`
+			Address               string                       `json:"address"`
+			LeasedIP              inventoryV1.ResourcePair     `json:"leased_ip"`
+			VerificationInventory *verificationInventoryStatus `json:"verification_inventory,omitempty"`
 		}{
-			ProviderStatus: *status,
-			Address:        providerAddr.String(),
-			LeasedIP:       leasedIP,
+			ProviderStatus:        *status,
+			Address:               providerAddr.String(),
+			LeasedIP:              leasedIP,
+			VerificationInventory: verificationStatus,
 		}
 		writeJSON(log, w, data)
 	}
