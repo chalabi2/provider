@@ -811,6 +811,16 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	persistentConfig, err := fromctx.PersistentConfigFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+
+	gwrest.SetVerificationInventoryStatusSource(
+		clusterSettings,
+		persistentConfig.InventorySnapshots(),
+	)
+
 	gwRest, err := gwrest.NewServer(
 		ctx,
 		logger,
@@ -825,7 +835,14 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service, snapshotter)
+	err = gwgrpc.NewServer(
+		ctx,
+		grpcaddr,
+		accQuerier,
+		service,
+		snapshotter,
+		persistentConfig.InventorySnapshots(),
+	)
 	if err != nil {
 		return err
 	}

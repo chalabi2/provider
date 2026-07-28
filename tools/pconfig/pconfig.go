@@ -10,6 +10,8 @@ import (
 
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/akash-network/provider/verification/inventory"
 )
 
 var (
@@ -44,5 +46,6 @@ type Storage interface {
 	StorageR
 	StorageW
 	BidEngine() BidEngine
+	InventorySnapshots() inventory.CommittedSnapshotStore
 	Close() error
 }
