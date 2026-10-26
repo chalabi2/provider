@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,22 @@ func volumeLeaseSelector(lid mtypes.LeaseID) string {
 	return sb.String()
 }
 
+// volumeShrinks reports whether next is a smaller size than the recorded
+// cur. An unreadable recorded size is overwritten rather than guarded.
+func volumeShrinks(cur, next string) bool {
+	curSize, err := strconv.ParseUint(cur, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	nextSize, err := strconv.ParseUint(next, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	return nextSize < curSize
+}
+
 func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dvbeta.Group) error {
 	if group == nil {
 		return fmt.Errorf("%w: no group provided for volume lease %s", kubeclienterrors.ErrInternalError, lid)
@@ -77,11 +94,18 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 
 	switch {
 	case err == nil:
-		// The volume already exists: a re-deploy of the same lease or an
-		// adoption/migration re-lease of the same owner/vid. The identity
-		// must match; the group/lease bookkeeping moves to the new lease.
+		// The volume already exists: a re-deploy of the same lease, a lease
+		// resize, or an adoption/migration re-lease of the same owner/vid.
+		// The identity must match; the group/lease bookkeeping moves to the
+		// new lease.
 		if obj.Spec.Owner != vol.Spec.Owner || obj.Spec.VID != vol.Spec.VID {
 			return fmt.Errorf("%w: %s owner/vid %s/%s", kubeclienterrors.ErrVolumeMismatch, vol.Name, obj.Spec.Owner, obj.Spec.VID)
+		}
+
+		// A PV only grows, so a smaller size would leave the record short of
+		// the bytes the PV holds.
+		if volumeShrinks(obj.Spec.Size, vol.Spec.Size) {
+			return fmt.Errorf("%w: %s from %s to %s", kubeclienterrors.ErrVolumeShrink, vol.Name, obj.Spec.Size, vol.Spec.Size)
 		}
 
 		uobj := obj.DeepCopy()

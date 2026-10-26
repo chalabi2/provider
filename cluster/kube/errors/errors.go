@@ -23,6 +23,7 @@ var (
 	ErrVolumeNotFound            = fmt.Errorf("%w: volume not found", errKubeClient)
 	ErrVolumeMismatch            = fmt.Errorf("%w: volume exists with different identity", errKubeClient)
 	ErrVolumeAttached            = fmt.Errorf("%w: volume is attached to another lease", errKubeClient)
+	ErrVolumeShrink              = fmt.Errorf("%w: volume cannot shrink", errKubeClient)
 )
 
 // IsKubeAPIUnreachable reports whether err indicates the kube API server is unreachable.

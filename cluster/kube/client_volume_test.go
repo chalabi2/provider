@@ -143,6 +143,49 @@ func TestDeployVolumeAdoptionRewritesLease(t *testing.T) {
 	require.Equal(t, newLid, mustLeaseIDFromCRD(t, obj.Spec.LeaseID))
 }
 
+func TestDeployVolumeGrowsSize(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	// the storage operator's record of the provisioned PV
+	obj, err := kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	obj.Status.Phase = crd.VolumePhaseAttached
+	obj.Status.PVName = "pvc-volume-test"
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	grown := testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)
+	grown.GroupSpec.Resources[0].Storage[0].Quantity = rtypes.NewResourceValue(300)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, grown))
+
+	obj, err = kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	require.Equal(t, "300", obj.Spec.Size)
+	require.Equal(t, crd.VolumePhaseAttached, obj.Status.Phase)
+	require.Equal(t, "pvc-volume-test", obj.Status.PVName)
+}
+
+func TestDeployVolumeRefusesShrink(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	shrunk := testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)
+	shrunk.GroupSpec.Resources[0].Storage[0].Quantity = rtypes.NewResourceValue(100)
+
+	err := kc.DeployVolume(context.Background(), lid, shrunk)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeShrink)
+
+	obj, err := kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	require.Equal(t, "200", obj.Spec.Size)
+}
+
 func mustLeaseIDFromCRD(t *testing.T, id crd.LeaseID) mtypes.LeaseID {
 	t.Helper()
 	lid, err := id.FromCRD()
