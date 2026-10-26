@@ -25,6 +25,7 @@ import (
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"
 	cmocks "github.com/akash-network/provider/mocks/cluster"
 	"github.com/akash-network/provider/session"
+	"github.com/akash-network/provider/testutil/chainmock"
 )
 
 type reclaimTestScaffold struct {
@@ -172,7 +173,7 @@ func TestReclaimSuppressedByInactiveLeaseTeardown(t *testing.T) {
 	query := clientmocks.NewQueryClient(t)
 	market := marketmocks.NewQueryClient(t)
 	client.On("Query").Return(query)
-	query.On("Market").Return(market)
+	query.On("Market").Return(chainmock.Market{QueryClient: market})
 	market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 		&mvbeta.QueryLeaseResponse{Lease: mtypes.Lease{ID: lid, State: mtypes.LeaseClosed}}, nil).Once()
 
@@ -241,7 +242,7 @@ func TestCheckLeaseActiveArmsReclaimDeadline(t *testing.T) {
 	query := clientmocks.NewQueryClient(t)
 	market := marketmocks.NewQueryClient(t)
 	client.On("Query").Return(query)
-	query.On("Market").Return(market)
+	query.On("Market").Return(chainmock.Market{QueryClient: market})
 	market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 		&mvbeta.QueryLeaseResponse{Lease: mtypes.Lease{
 			ID:          lid,
