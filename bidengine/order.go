@@ -465,6 +465,8 @@ loop:
 				Sources: deposit.Sources{deposit.SourceBalance},
 			}, offer)
 			msg.ReclamationWindow = o.cfg.ReclamationWindow
+			// a volume order's bid states the volume policy it honors
+			msg.VolumePolicy = group.GroupSpec.Volume
 			bidch = runner.Do(func() runner.Result {
 				return runner.NewResult(o.session.Client().Tx().BroadcastMsgs(ctx, []sdk.Msg{msg}, aclient.WithResultCodeAsError()))
 			})

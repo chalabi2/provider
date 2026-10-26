@@ -558,6 +558,9 @@ func Test_BidVolumeOrderAndUnreserve(t *testing.T) {
 	createBidMsg := requireMsgType[*mvbeta.MsgCreateBid](t, broadcast)
 	require.Equal(t, createBidMsg.ID.OrderID(), scaffold.orderID)
 
+	// the bid states the volume policy it honors, which the chain requires
+	require.Equal(t, volumeGroupSpec().Volume, createBidMsg.VolumePolicy)
+
 	order.lc.Shutdown(nil)
 
 	// Should have called unreserve once, nothing happened after the bid

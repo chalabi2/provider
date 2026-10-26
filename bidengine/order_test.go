@@ -279,6 +279,9 @@ func Test_BidOrderAndUnreserve(t *testing.T) {
 
 	require.Equal(t, createBidMsg.ID.OrderID(), scaffold.orderID)
 
+	// only a volume order's bid carries a volume policy
+	require.Nil(t, createBidMsg.VolumePolicy)
+
 	priceDenom := createBidMsg.Price.Denom
 	require.Equal(t, sdkutil.DenomUact, priceDenom)
 	priceAmount := createBidMsg.Price.Amount
