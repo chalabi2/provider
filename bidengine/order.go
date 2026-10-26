@@ -550,33 +550,61 @@ loop:
 	}
 }
 
+// bidGates are the provider's checks on a group's shape and terms before it
+// commits capacity to the group. Order monitors run them before bidding, and
+// the lease resize evaluator runs them on the resized group.
+type bidGates struct {
+	cfg     Config
+	session session.Session
+	pass    ProviderAttrSignatureService
+	storage StorageInventory
+	// volumes answers local Volume CRD pre-checks; nil skips them.
+	volumes VolumeLookup
+	log     log.Logger
+}
+
+func (o *order) gates() bidGates {
+	return bidGates{
+		cfg:     o.cfg,
+		session: o.session,
+		pass:    o.pass,
+		storage: o.storage,
+		volumes: o.volumes,
+		log:     o.log,
+	}
+}
+
 func (o *order) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error) {
+	return o.gates().shouldBid(ctx, group)
+}
+
+func (g bidGates) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error) {
 	// does provider have required attributes?
-	if !group.GroupSpec.MatchAttributes(o.session.Provider().Attributes) {
-		o.log.Debug("unable to fulfill: incompatible provider attributes")
+	if !group.GroupSpec.MatchAttributes(g.session.Provider().Attributes) {
+		g.log.Debug("unable to fulfill: incompatible provider attributes")
 		return false, nil
 	}
 
 	// does order have required attributes?
-	if !o.cfg.Attributes.SubsetOf(group.GroupSpec.Requirements.Attributes) {
-		o.log.Debug("unable to fulfill: incompatible order attributes")
+	if !g.cfg.Attributes.SubsetOf(group.GroupSpec.Requirements.Attributes) {
+		g.log.Debug("unable to fulfill: incompatible order attributes")
 		return false, nil
 	}
 
-	attr, err := o.pass.GetAttributes()
+	attr, err := g.pass.GetAttributes()
 	if err != nil {
 		return false, err
 	}
 
 	// does provider have required capabilities?
 	if !group.GroupSpec.MatchResourcesRequirements(attr) {
-		o.log.Debug("unable to fulfill: incompatible attributes for resources requirements", "wanted", group.GroupSpec, "have", attr)
+		g.log.Debug("unable to fulfill: incompatible attributes for resources requirements", "wanted", group.GroupSpec, "have", attr)
 		return false, nil
 	}
 
 	for _, resources := range group.GroupSpec.GetResourceUnits() {
-		if len(resources.Storage) > o.cfg.MaxGroupVolumes {
-			o.log.Info(fmt.Sprintf("unable to fulfill: group volumes count exceeds (%d > %d)", len(resources.Storage), o.cfg.MaxGroupVolumes))
+		if len(resources.Storage) > g.cfg.MaxGroupVolumes {
+			g.log.Info(fmt.Sprintf("unable to fulfill: group volumes count exceeds (%d > %d)", len(resources.Storage), g.cfg.MaxGroupVolumes))
 			return false, nil
 		}
 	}
@@ -585,33 +613,33 @@ func (o *order) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error
 	// Parked volume. Cheap local filter only — the chain gates attach bids
 	// to the colocated provider regardless, so no lookup wired means no
 	// filter.
-	if o.volumes != nil {
+	if g.volumes != nil {
 		for _, resources := range group.GroupSpec.GetResourceUnits() {
 			for i := range resources.Volumes {
 				ref := resources.Volumes[i]
 
-				found, err := o.volumes.ParkedVolume(ctx, ref)
+				found, err := g.volumes.ParkedVolume(ctx, ref)
 				if err != nil {
 					return false, err
 				}
 
 				if !found {
-					o.log.Debug("unable to fulfill: volume reference not parked locally", "volume", ref.String())
+					g.log.Debug("unable to fulfill: volume reference not parked locally", "volume", ref.String())
 					return false, nil
 				}
 			}
 		}
 	}
 
-	if ok, err := o.matchSignatureRequirements(&group.GroupSpec); err != nil || !ok {
+	if ok, err := g.matchSignatureRequirements(&group.GroupSpec); err != nil || !ok {
 		if err == nil {
-			o.log.Debug("attribute signature requirements not met")
+			g.log.Debug("attribute signature requirements not met")
 		}
 		return false, err
 	}
 
 	if err := group.GroupSpec.ValidateBasic(); err != nil {
-		o.log.Error("unable to fulfill: group validation error",
+		g.log.Error("unable to fulfill: group validation error",
 			"err", err)
 		return false, nil
 	}
@@ -621,7 +649,7 @@ func (o *order) shouldBid(ctx context.Context, group *dtypes.Group) (bool, error
 // matchSignatureRequirements checks the group's auditor signature
 // requirements against the provider's audited attributes. Shared by the
 // compute and volume shouldBid paths.
-func (o *order) matchSignatureRequirements(gspec *dtypes.GroupSpec) (bool, error) {
+func (g bidGates) matchSignatureRequirements(gspec *dtypes.GroupSpec) (bool, error) {
 	signatureRequirements := gspec.Requirements.SignedBy
 	if signatureRequirements.Size() == 0 {
 		return true, nil
@@ -630,9 +658,9 @@ func (o *order) matchSignatureRequirements(gspec *dtypes.GroupSpec) (bool, error
 	// Check that the signature requirements are met for each attribute
 	var provAttr atypes.AuditedProviders
 	ownAttrs := atypes.AuditedProvider{
-		Owner:      o.session.Provider().Owner,
+		Owner:      g.session.Provider().Owner,
 		Auditor:    "",
-		Attributes: o.session.Provider().Attributes,
+		Attributes: g.session.Provider().Attributes,
 	}
 	provAttr = append(provAttr, ownAttrs)
 	auditors := make([]string, 0, len(gspec.Requirements.SignedBy.AllOf)+len(gspec.Requirements.SignedBy.AnyOf))
@@ -645,7 +673,7 @@ func (o *order) matchSignatureRequirements(gspec *dtypes.GroupSpec) (bool, error
 		if done {
 			continue
 		}
-		result, err := o.pass.GetAuditorAttributeSignatures(auditor)
+		result, err := g.pass.GetAuditorAttributeSignatures(auditor)
 		if err != nil {
 			return false, err
 		}

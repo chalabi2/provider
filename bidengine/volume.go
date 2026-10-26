@@ -135,97 +135,21 @@ func volumeStorage(gspec *dtypes.GroupSpec) (string, uint64, bool) {
 // (-retain class installed), the provider caps satisfied, and live per-class
 // headroom in the retained cluster inventory.
 func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool, error) {
-	gspec := &group.GroupSpec
-	vol := gspec.Volume
+	gates := o.gates()
 
-	// does provider have required attributes?
-	if !gspec.MatchAttributes(o.session.Provider().Attributes) {
-		o.log.Debug("unable to fulfill: incompatible provider attributes")
-		return false, nil
+	if ok, err := gates.volumeTerms(group); err != nil || !ok {
+		return ok, err
 	}
 
-	// does order have required attributes?
-	if !o.cfg.Attributes.SubsetOf(gspec.Requirements.Attributes) {
-		o.log.Debug("unable to fulfill: incompatible order attributes")
-		return false, nil
-	}
-
-	attr, err := o.pass.GetAttributes()
-	if err != nil {
-		return false, err
-	}
-
-	// is the storage class in the advertised capabilities? The storage leg
-	// of MatchResourcesRequirements is exactly the class capability check;
-	// the GPU leg is inert on the zero-GPU volume shape.
-	if !gspec.MatchResourcesRequirements(attr) {
-		o.log.Debug("unable to fulfill: incompatible attributes for resources requirements", "wanted", gspec, "have", attr)
-		return false, nil
-	}
-
-	// audit gate — identical to the compute path
-	if ok, err := o.matchSignatureRequirements(gspec); err != nil || !ok {
-		if err == nil {
-			o.log.Debug("attribute signature requirements not met")
-		}
-		return false, err
-	}
-
-	if err := gspec.ValidateBasic(); err != nil {
-		o.log.Error("unable to fulfill: volume group validation error", "err", err)
-		return false, nil
-	}
-
-	class, size, ok := volumeStorage(gspec)
-	if !ok {
-		o.log.Error("unable to fulfill: malformed volume group storage")
-		return false, nil
-	}
-
-	// participation knob: the class must be configured for volume bidding,
-	// which asserts the matching -retain StorageClass is installed
-	if !o.cfg.Volumes.ClassEnabled(class) {
-		o.log.Debug("unable to fulfill: storage class not configured for volumes", "class", class)
-		return false, nil
-	}
-
-	// provider caps
-	if o.cfg.Volumes.MaxSize > 0 && size > o.cfg.Volumes.MaxSize {
-		o.log.Debug("unable to fulfill: volume size exceeds provider cap", "size", size, "max", o.cfg.Volumes.MaxSize)
-		return false, nil
-	}
-
-	if vol.Retention > o.cfg.Volumes.MaxRetention {
-		o.log.Debug("unable to fulfill: volume retention exceeds provider cap", "retention", vol.Retention, "max", o.cfg.Volumes.MaxRetention)
-		return false, nil
-	}
-
-	if vol.MaxReplicas > o.cfg.Volumes.MaxReplicas {
-		o.log.Debug("unable to fulfill: volume max_replicas exceeds provider cap", "max_replicas", vol.MaxReplicas, "max", o.cfg.Volumes.MaxReplicas)
-		return false, nil
-	}
-
-	if vol.ReplicaOf != nil && o.cfg.Volumes.MaxReplicas == 0 {
-		o.log.Debug("unable to fulfill: replica volume but replication not supported")
-		return false, nil
-	}
-
-	// live per-class headroom from the retained cluster inventory
-	avail, found := o.storage.AvailableStorage(class)
-	if !found {
-		o.log.Debug("unable to fulfill: no live inventory for storage class", "class", class)
-		return false, nil
-	}
-
-	if avail < size {
-		o.log.Debug("unable to fulfill: insufficient storage class headroom", "class", class, "available", avail, "requested", size)
+	class, size, _ := volumeStorage(&group.GroupSpec)
+	if !gates.volumeHeadroom(class, size) {
 		return false, nil
 	}
 
 	// adoption pre-check: the retained volume must exist locally. Cheap
 	// local filter only — the chain gates adoption bids to the retaining
 	// provider regardless, so no lookup wired means no filter.
-	if vol.Adopt != nil && o.volumes != nil {
+	if vol := group.GroupSpec.Volume; vol.Adopt != nil && o.volumes != nil {
 		found, err := o.volumes.RetainedVolume(ctx, group.ID.Owner, vol.Vid)
 		if err != nil {
 			return false, err
@@ -238,4 +162,102 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 	}
 
 	return true, nil
+}
+
+// volumeTerms runs the shouldBidVolume gates that do not depend on live
+// headroom or local Volume CRDs: placement, audit, class and provider caps.
+func (g bidGates) volumeTerms(group *dtypes.Group) (bool, error) {
+	gspec := &group.GroupSpec
+	vol := gspec.Volume
+
+	// does provider have required attributes?
+	if !gspec.MatchAttributes(g.session.Provider().Attributes) {
+		g.log.Debug("unable to fulfill: incompatible provider attributes")
+		return false, nil
+	}
+
+	// does order have required attributes?
+	if !g.cfg.Attributes.SubsetOf(gspec.Requirements.Attributes) {
+		g.log.Debug("unable to fulfill: incompatible order attributes")
+		return false, nil
+	}
+
+	attr, err := g.pass.GetAttributes()
+	if err != nil {
+		return false, err
+	}
+
+	// is the storage class in the advertised capabilities? The storage leg
+	// of MatchResourcesRequirements is exactly the class capability check;
+	// the GPU leg is inert on the zero-GPU volume shape.
+	if !gspec.MatchResourcesRequirements(attr) {
+		g.log.Debug("unable to fulfill: incompatible attributes for resources requirements", "wanted", gspec, "have", attr)
+		return false, nil
+	}
+
+	// audit gate — identical to the compute path
+	if ok, err := g.matchSignatureRequirements(gspec); err != nil || !ok {
+		if err == nil {
+			g.log.Debug("attribute signature requirements not met")
+		}
+		return false, err
+	}
+
+	if err := gspec.ValidateBasic(); err != nil {
+		g.log.Error("unable to fulfill: volume group validation error", "err", err)
+		return false, nil
+	}
+
+	class, size, ok := volumeStorage(gspec)
+	if !ok {
+		g.log.Error("unable to fulfill: malformed volume group storage")
+		return false, nil
+	}
+
+	// participation knob: the class must be configured for volume bidding,
+	// which asserts the matching -retain StorageClass is installed
+	if !g.cfg.Volumes.ClassEnabled(class) {
+		g.log.Debug("unable to fulfill: storage class not configured for volumes", "class", class)
+		return false, nil
+	}
+
+	// provider caps
+	if g.cfg.Volumes.MaxSize > 0 && size > g.cfg.Volumes.MaxSize {
+		g.log.Debug("unable to fulfill: volume size exceeds provider cap", "size", size, "max", g.cfg.Volumes.MaxSize)
+		return false, nil
+	}
+
+	if vol.Retention > g.cfg.Volumes.MaxRetention {
+		g.log.Debug("unable to fulfill: volume retention exceeds provider cap", "retention", vol.Retention, "max", g.cfg.Volumes.MaxRetention)
+		return false, nil
+	}
+
+	if vol.MaxReplicas > g.cfg.Volumes.MaxReplicas {
+		g.log.Debug("unable to fulfill: volume max_replicas exceeds provider cap", "max_replicas", vol.MaxReplicas, "max", g.cfg.Volumes.MaxReplicas)
+		return false, nil
+	}
+
+	if vol.ReplicaOf != nil && g.cfg.Volumes.MaxReplicas == 0 {
+		g.log.Debug("unable to fulfill: replica volume but replication not supported")
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// volumeHeadroom reports whether the class has need more bytes of live
+// headroom in the retained cluster inventory.
+func (g bidGates) volumeHeadroom(class string, need uint64) bool {
+	avail, found := g.storage.AvailableStorage(class)
+	if !found {
+		g.log.Debug("unable to fulfill: no live inventory for storage class", "class", class)
+		return false
+	}
+
+	if avail < need {
+		g.log.Debug("unable to fulfill: insufficient storage class headroom", "class", class, "available", avail, "requested", need)
+		return false
+	}
+
+	return true
 }
