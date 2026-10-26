@@ -325,17 +325,14 @@ func (c *ceph) run(startch chan<- struct{}) error {
 							scs[scItem.Name] = sc
 						}
 
-						if _, exists = pvMap[obj.Name]; !exists {
-							pvMap[obj.Name] = *obj
-							sc.allocated.Add(capacity)
-						}
+						trackPVCapacity(pvMap, obj, capacity, sc.allocated)
 					case watch.Deleted:
 						res, exists := obj.Spec.Capacity[corev1.ResourceStorage]
 						if !exists {
 							break
 						}
 
-						delete(pvMap, obj.Name)
+						res = untrackPVCapacity(pvMap, obj, res)
 
 						sc, exists := scs[obj.Spec.StorageClassName]
 						if !exists {

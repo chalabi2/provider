@@ -153,17 +153,14 @@ func (c *rancher) run(startch chan<- struct{}) error {
 						scs[obj.Spec.StorageClassName] = params
 					}
 
-					if _, exists = pvMap[obj.Name]; !exists {
-						pvMap[obj.Name] = *obj
-						params.allocated.Add(res)
-					}
+					trackPVCapacity(pvMap, obj, res, &params.allocated)
 				case watch.Deleted:
 					res, exists := obj.Spec.Capacity[corev1.ResourceStorage]
 					if !exists {
 						break
 					}
 
-					delete(pvMap, obj.Name)
+					res = untrackPVCapacity(pvMap, obj, res)
 
 					params, exists := scs[obj.Spec.StorageClassName]
 					if !exists {
