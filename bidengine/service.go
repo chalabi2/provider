@@ -21,6 +21,7 @@ import (
 	apclient "pkg.akt.dev/go/provider/client"
 	provider "pkg.akt.dev/go/provider/v1"
 	"pkg.akt.dev/go/util/pubsub"
+	"pkg.akt.dev/go/util/runner"
 	mquery "pkg.akt.dev/node/v2/x/market/query"
 
 	"github.com/akash-network/provider/cluster"
@@ -352,6 +353,27 @@ func (s *service) run(ctx context.Context) {
 	rctx, rcancel := context.WithCancel(ctx)
 	defer rcancel()
 
+	// Applied resizes are swapped into the reservations one at a time, so two
+	// resizes of a lease land in the order the chain applied them.
+	var (
+		applyQueue []mtypes.LeaseID
+		applych    <-chan runner.Result
+	)
+
+	startApply := func() {
+		if applych != nil || len(applyQueue) == 0 {
+			return
+		}
+
+		lid := applyQueue[0]
+		applyQueue = applyQueue[1:]
+
+		applych = runner.Do(func() runner.Result {
+			s.applyResize(rctx, lid)
+			return runner.NewResult(nil, nil)
+		})
+	}
+
 	bus := fromctx.MustPubSubFromCtx(ctx)
 
 	// live per-class storage headroom for volume orders rides the retained
@@ -425,7 +447,13 @@ loop:
 
 				s.session.Log().Info("lease resized", "lid", ev.ID, "price", ev.Price.String())
 				s.dropResize(ev.ID)
+
+				applyQueue = append(applyQueue, ev.ID)
+				startApply()
 			}
+		case <-applych:
+			applych = nil
+			startApply()
 		case update := <-inventorych:
 			if inv, valid := update.(*provider.Inventory); valid {
 				s.storageInv.update(inv)
@@ -454,6 +482,10 @@ loop:
 
 	rcancel()
 	s.resizeWG.Wait()
+
+	if applych != nil {
+		<-applych
+	}
 
 	s.session.Log().Info("draining order monitors", "count", len(s.orders))
 	// drain: wait for all order monitors to complete.

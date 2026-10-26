@@ -25,6 +25,9 @@ import (
 // success the deployment is announced as deployed so the inventory service
 // marks the durable reservation allocated — the reservation itself is
 // deliberately kept (existing on-win invariant).
+//
+// A lease resize of a volume reaches it as event.VolumeLeaseResized and is
+// recorded the same way; the operator grows the claim to the new size.
 type volumeProvisioner struct {
 	ctx     context.Context
 	session session.Session
@@ -108,6 +111,13 @@ loop:
 					IsNewLease: true,
 				}); err != nil {
 					vp.log.Error("failed to publish to event queue", "err", err)
+				}
+			case event.VolumeLeaseResized:
+				vp.log.Info("volume lease resized", "lid", ev.LeaseID)
+
+				if err := vp.cclient.DeployVolume(vp.ctx, ev.LeaseID, ev.Group); err != nil {
+					// the storage operator's chain watch records the size too
+					vp.log.Error("recording volume resize", "err", err, "lid", ev.LeaseID)
 				}
 			}
 		}

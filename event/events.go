@@ -25,6 +25,14 @@ type VolumeLeaseWon struct {
 	Price   sdk.DecCoin
 }
 
+// VolumeLeaseResized is published when the chain has applied a resize of a
+// storage-only (volume) lease, for the volume provisioner to record the new
+// size on the volume.
+type VolumeLeaseResized struct {
+	LeaseID mtypes.LeaseID
+	Group   *dtypes.Group
+}
+
 // ManifestReceived stores leaseID, manifest received, deployment and group details
 // to be provisioned by the Provider.
 type ManifestReceived struct {

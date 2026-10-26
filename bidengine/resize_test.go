@@ -29,6 +29,7 @@ import (
 
 	"github.com/akash-network/provider/cluster"
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"
+	"github.com/akash-network/provider/event"
 	cmocks "github.com/akash-network/provider/mocks/cluster"
 	"github.com/akash-network/provider/operator/waiter"
 	"github.com/akash-network/provider/session"
@@ -501,5 +502,68 @@ func Test_LeaseResizeCanceledWhileEvaluating(t *testing.T) {
 	case msgs := <-s.broadcasts:
 		t.Fatalf("canceled resize answered: %v", msgs)
 	default:
+	}
+}
+
+func Test_LeaseResizedSwapsReservation(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	lid := s.lease(1)
+
+	// the group as the chain holds it once the resize is applied
+	s.group.GroupSpec.Resources = withResizedMemory(s.group.GroupSpec.Resources)
+
+	swapped := make(chan *dvbeta.Group, 1)
+	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Run(func(args mock.Arguments) {
+		swapped <- args.Get(1).(*dvbeta.Group)
+	}).Return(nil)
+
+	s.start(t, nil, nil)
+
+	other := lid
+	other.Provider = testutil.AccAddress(t).String()
+
+	require.NoError(t, s.bus.Publish(&mtypes.EventLeaseResized{ID: other}))
+	require.NoError(t, s.bus.Publish(&mtypes.EventLeaseResized{ID: lid}))
+
+	group := testutil.ChannelWaitForValue(t, swapped).(*dvbeta.Group)
+	require.Equal(t, s.group.ID, group.ID)
+	require.Equal(t, uint64(resizedMemory), group.GroupSpec.Resources[0].Memory.Quantity.Value())
+
+	s.cluster.AssertNumberOfCalls(t, "Resize", 1)
+}
+
+func Test_LeaseResizedHandsVolumeToProvisioner(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	s.group = *volumeGroupForTest(t, volumeGroupSpec())
+	s.group.GroupSpec.Resources = withVolumeSize(s.group.GroupSpec.Resources, 25*unit.Gi)
+	lid := s.lease(1)
+
+	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Return(nil)
+	s.start(t, nil, nil)
+
+	sub, err := s.bus.Subscribe()
+	require.NoError(t, err)
+	defer sub.Close()
+
+	require.NoError(t, s.bus.Publish(&mtypes.EventLeaseResized{ID: lid}))
+
+	for {
+		select {
+		case ev := <-sub.Events():
+			resized, ok := ev.(event.VolumeLeaseResized)
+			if !ok {
+				continue
+			}
+
+			require.Equal(t, lid, resized.LeaseID)
+			require.Equal(t, uint64(25*unit.Gi), resized.Group.GroupSpec.Resources[0].Storage[0].Quantity.Value())
+
+			// the reservation is swapped before the volume is handed over
+			s.cluster.AssertCalled(t, "Resize", lid.OrderID(), mock.Anything)
+
+			return
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for VolumeLeaseResized")
+		}
 	}
 }

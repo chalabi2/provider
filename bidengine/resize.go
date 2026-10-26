@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/avast/retry-go/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -23,8 +24,14 @@ import (
 
 	"github.com/akash-network/provider/cluster"
 	ctypes "github.com/akash-network/provider/cluster/types/v1beta3"
+	"github.com/akash-network/provider/event"
 	"github.com/akash-network/provider/session"
 )
+
+// resizeApplyAttempts bounds the group reads of an applied resize. If they all
+// fail the reservation keeps the old size, and the inventory under-counts the
+// tenant's resized pods until the provider restarts.
+const resizeApplyAttempts = 5
 
 var leaseResizeCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "provider_lease_resize",
@@ -420,5 +427,51 @@ func (s *service) pruneResizes() {
 			r.cancel()
 			delete(s.resizes, lid)
 		}
+	}
+}
+
+// applyResize brings the provider's records in line with a resize the chain
+// has applied: the reservation takes the resized group, and a volume lease
+// hands its new size to the volume provisioner. The group is read back from
+// chain rather than taken from an evaluation, so a resize this run did not
+// evaluate, such as an operator's manual accept, is applied the same way.
+func (s *service) applyResize(ctx context.Context, lid mtypes.LeaseID) {
+	log := s.session.Log().With("lid", lid)
+
+	var group dtypes.Group
+
+	err := retry.Do(func() error {
+		res, err := s.session.Client().Query().Deployment().Group(ctx, &dtypes.QueryGroupRequest{ID: lid.GroupID()})
+		if err != nil {
+			return err
+		}
+
+		group = res.GetGroup()
+
+		return nil
+	},
+		retry.Context(ctx),
+		retry.Attempts(resizeApplyAttempts),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.LastErrorOnly(true))
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error("fetching resized group", "err", err)
+		}
+
+		return
+	}
+
+	if err := s.cluster.Resize(lid.OrderID(), &group); err != nil {
+		log.Error("resizing reservation", "err", err)
+	}
+
+	if group.GroupSpec.Volume == nil {
+		return
+	}
+
+	if err := s.bus.Publish(event.VolumeLeaseResized{LeaseID: lid, Group: &group}); err != nil {
+		log.Error("failed to publish to event queue", "err", err)
 	}
 }
