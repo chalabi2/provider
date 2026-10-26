@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/boz/go-lifecycle"
@@ -100,12 +101,18 @@ func NewService(
 		pass:       providerAttrService,
 		waiter:     waiter,
 		storageInv: newStorageInventory(),
+		resizes:    make(map[mtypes.LeaseID]*leaseResize),
+		resizesch:  make(chan []mvbeta.LeaseResize, 1),
 	}
 
-	// register the fetcher before starting run: run waits for the group on exit, and a task
+	// register the fetchers before starting run: run waits for the group on exit, and a task
 	// added after that wait has returned would outlive the service
 	group.Go(func() error {
 		return s.ordersFetcher(ctx, aqc)
+	})
+
+	group.Go(func() error {
+		return s.resizesFetcher(ctx, aqc)
 	})
 
 	go s.lc.WatchContext(pctx)
@@ -160,6 +167,14 @@ type service struct {
 	// storageInv retains live per-class storage headroom for volume orders,
 	// fed from the retained inventory-status topic.
 	storageInv *storageInventory
+
+	// resizes tracks the lease resize requests seen this run, keyed by lease,
+	// until the chain resolves them or they expire.
+	resizes map[mtypes.LeaseID]*leaseResize
+	// resizesch receives pages of pending lease resizes to catch up on.
+	resizesch chan []mvbeta.LeaseResize
+	// resizeWG tracks running resize evaluations.
+	resizeWG sync.WaitGroup
 }
 
 func (s *service) Close() error {
@@ -309,9 +324,9 @@ func (s *service) processOrdersPage(page ordersPage) {
 	}
 }
 
-// stopOrdersFetcher cancels the orders fetcher and waits for it to return, so it does not
-// outlive the service.
-func (s *service) stopOrdersFetcher() {
+// stopFetchers cancels the orders and lease resizes fetchers and waits for them to return,
+// so they do not outlive the service.
+func (s *service) stopFetchers() {
 	s.cancel()
 
 	if err := s.group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
@@ -321,7 +336,7 @@ func (s *service) stopOrdersFetcher() {
 
 func (s *service) run(ctx context.Context) {
 	defer s.lc.ShutdownCompleted()
-	defer s.stopOrdersFetcher()
+	defer s.stopFetchers()
 	defer s.sub.Close()
 	s.updateOrderManagerGauge()
 
@@ -331,6 +346,11 @@ func (s *service) run(ctx context.Context) {
 		s.lc.ShutdownInitiated(err)
 		return
 	}
+
+	// canceled on shutdown: a resize evaluation holds no reservation, so it is
+	// dropped rather than drained
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
 
 	bus := fromctx.MustPubSubFromCtx(ctx)
 
@@ -359,6 +379,8 @@ loop:
 			break loop
 		case page := <-s.ordersch:
 			s.processOrdersPage(page)
+		case page := <-s.resizesch:
+			s.processResizesPage(rctx, page)
 		case ev := <-s.sub.Events():
 			switch ev := ev.(type) { // nolint: gocritic
 			case *mtypes.EventOrderCreated:
@@ -382,6 +404,27 @@ loop:
 				ordersCounter.WithLabelValues("start").Inc()
 				s.orders[key] = order
 				trySignal()
+			case *mtypes.EventLeaseResizeRequested:
+				if ev.ID.Provider != s.session.Provider().Address().String() {
+					break
+				}
+
+				s.session.Log().Info("lease resize requested", "lid", ev.ID, "max_price", ev.MaxPrice.String())
+				s.startResize(rctx, ev.ID, ev.ExpiresAt, nil)
+			case *mtypes.EventLeaseResizeCanceled:
+				if ev.ID.Provider != s.session.Provider().Address().String() {
+					break
+				}
+
+				s.session.Log().Info("lease resize canceled", "lid", ev.ID, "reason", ev.Reason.String())
+				s.dropResize(ev.ID)
+			case *mtypes.EventLeaseResized:
+				if ev.ID.Provider != s.session.Provider().Address().String() {
+					break
+				}
+
+				s.session.Log().Info("lease resized", "lid", ev.ID, "price", ev.Price.String())
+				s.dropResize(ev.ID)
 			}
 		case update := <-inventorych:
 			if inv, valid := update.(*provider.Inventory); valid {
@@ -406,7 +449,11 @@ loop:
 	// stop queueing catch-up orders that will not be processed
 	s.cancel()
 
+	// stopped first, so an evaluation waiting on attributes returns
 	s.pass.lc.ShutdownAsync(nil)
+
+	rcancel()
+	s.resizeWG.Wait()
 
 	s.session.Log().Info("draining order monitors", "count", len(s.orders))
 	// drain: wait for all order monitors to complete.

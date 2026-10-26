@@ -118,6 +118,7 @@ func makeMocks(s *orderTestScaffold, groupResult *dvbeta.QueryGroupResponse) {
 
 	deplMocks.On("Group", mock.Anything, mock.Anything).Return(groupResult, nil)
 	marketMocks.On("Orders", mock.Anything, mock.Anything).Return(&mvbeta.QueryOrdersResponse{}, nil)
+	marketMocks.On("LeaseResizes", mock.Anything, mock.Anything).Return(&mvbeta.QueryLeaseResizesResponse{}, nil)
 	providerMocks.On("Provider", mock.Anything, mock.Anything).Return(&ptypes.QueryProviderResponse{}, nil)
 
 	queryMocks.On("ClientContext").Return(sdkclient.Context{HomeDir: homeDir}, nil)
