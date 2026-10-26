@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta4"
+	manifest "pkg.akt.dev/go/manifest/v2beta3"
 
 	"github.com/akash-network/provider/utils/httperror"
 )

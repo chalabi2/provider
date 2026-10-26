@@ -11,7 +11,7 @@ import (
 
 	"cosmossdk.io/log"
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	apclient "pkg.akt.dev/go/provider/client"
 	provider "pkg.akt.dev/go/provider/v1"

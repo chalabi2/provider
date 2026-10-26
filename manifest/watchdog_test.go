@@ -11,10 +11,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	clientmocks "pkg.akt.dev/go/mocks/node/client"
-	aclient "pkg.akt.dev/go/node/client/v1beta4"
+	aclient "pkg.akt.dev/go/node/client/v1beta3"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	"pkg.akt.dev/go/testutil"
 

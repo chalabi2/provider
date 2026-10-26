@@ -13,11 +13,11 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	mani "pkg.akt.dev/go/manifest/v2beta4"
+	mani "pkg.akt.dev/go/manifest/v2beta3"
 	clientmocks "pkg.akt.dev/go/mocks/node/client"
 	marketmocks "pkg.akt.dev/go/mocks/node/client/market"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	"pkg.akt.dev/go/testutil"
 	"pkg.akt.dev/go/util/pubsub"

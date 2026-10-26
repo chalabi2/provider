@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"

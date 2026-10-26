@@ -10,9 +10,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	kfake "k8s.io/client-go/kubernetes/fake"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta4"
+	manifest "pkg.akt.dev/go/manifest/v2beta3"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/node/types/unit"

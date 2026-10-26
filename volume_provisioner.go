@@ -7,7 +7,7 @@ import (
 
 	"cosmossdk.io/log"
 
-	mani "pkg.akt.dev/go/manifest/v2beta4"
+	mani "pkg.akt.dev/go/manifest/v2beta3"
 	"pkg.akt.dev/go/util/pubsub"
 
 	"github.com/akash-network/provider/cluster"

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	attrtypes "pkg.akt.dev/go/node/types/attributes/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/testutil"

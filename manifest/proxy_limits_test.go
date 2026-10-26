@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta4"
+	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta3"
 )
 
 func manifestWithProxy(p *maniv2beta2.ProxyOptions) maniv2beta2.Manifest {

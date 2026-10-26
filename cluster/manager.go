@@ -16,11 +16,11 @@ import (
 	"cosmossdk.io/log"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	mani "pkg.akt.dev/go/manifest/v2beta4"
-	aclient "pkg.akt.dev/go/node/client/v1beta4"
+	mani "pkg.akt.dev/go/manifest/v2beta3"
+	aclient "pkg.akt.dev/go/node/client/v1beta3"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	"pkg.akt.dev/go/util/pubsub"
 
 	kubeclienterrors "github.com/akash-network/provider/cluster/kube/errors"

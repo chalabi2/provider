@@ -12,8 +12,8 @@ import (
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
 
 	aclient "pkg.akt.dev/go/node/client/discovery"
-	sclient "pkg.akt.dev/go/node/client/v1beta4"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	sclient "pkg.akt.dev/go/node/client/v1beta3"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	apclient "pkg.akt.dev/go/provider/client"
 	provider "pkg.akt.dev/go/provider/v1"
 

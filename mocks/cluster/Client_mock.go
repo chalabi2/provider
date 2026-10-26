@@ -15,9 +15,9 @@ import (
 	mock "github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/tools/remotecommand"
-	"pkg.akt.dev/go/manifest/v2beta4"
+	"pkg.akt.dev/go/manifest/v2beta3"
 	v10 "pkg.akt.dev/go/node/deployment/v1"
-	"pkg.akt.dev/go/node/deployment/v1beta5"
+	"pkg.akt.dev/go/node/deployment/v1beta4"
 	"pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/provider/client"
 )
@@ -307,7 +307,7 @@ func (_c *Client_DeclareHostname_Call) RunAndReturn(run func(ctx context.Context
 }
 
 // DeclareIP provides a mock function for the type Client
-func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool) error {
+func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool) error {
 	ret := _mock.Called(ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)
 
 	if len(ret) == 0 {
@@ -315,7 +315,7 @@ func (_mock *Client) DeclareIP(ctx context.Context, lID v1.LeaseID, serviceName 
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, uint32, v2beta4.ServiceProtocol, string, bool) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, uint32, v2beta3.ServiceProtocol, string, bool) error); ok {
 		r0 = returnFunc(ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)
 	} else {
 		r0 = ret.Error(0)
@@ -334,14 +334,14 @@ type Client_DeclareIP_Call struct {
 //   - serviceName string
 //   - port uint32
 //   - externalPort uint32
-//   - proto v2beta4.ServiceProtocol
+//   - proto v2beta3.ServiceProtocol
 //   - sharingKey string
 //   - overwrite bool
 func (_e *Client_Expecter) DeclareIP(ctx interface{}, lID interface{}, serviceName interface{}, port interface{}, externalPort interface{}, proto interface{}, sharingKey interface{}, overwrite interface{}) *Client_DeclareIP_Call {
 	return &Client_DeclareIP_Call{Call: _e.mock.On("DeclareIP", ctx, lID, serviceName, port, externalPort, proto, sharingKey, overwrite)}
 }
 
-func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool)) *Client_DeclareIP_Call {
+func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool)) *Client_DeclareIP_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -363,9 +363,9 @@ func (_c *Client_DeclareIP_Call) Run(run func(ctx context.Context, lID v1.LeaseI
 		if args[4] != nil {
 			arg4 = args[4].(uint32)
 		}
-		var arg5 v2beta4.ServiceProtocol
+		var arg5 v2beta3.ServiceProtocol
 		if args[5] != nil {
-			arg5 = args[5].(v2beta4.ServiceProtocol)
+			arg5 = args[5].(v2beta3.ServiceProtocol)
 		}
 		var arg6 string
 		if args[6] != nil {
@@ -394,7 +394,7 @@ func (_c *Client_DeclareIP_Call) Return(err error) *Client_DeclareIP_Call {
 	return _c
 }
 
-func (_c *Client_DeclareIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta4.ServiceProtocol, sharingKey string, overwrite bool) error) *Client_DeclareIP_Call {
+func (_c *Client_DeclareIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, port uint32, externalPort uint32, proto v2beta3.ServiceProtocol, sharingKey string, overwrite bool) error) *Client_DeclareIP_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -457,7 +457,7 @@ func (_c *Client_Deploy_Call) RunAndReturn(run func(ctx context.Context, deploym
 }
 
 // DeployVolume provides a mock function for the type Client
-func (_mock *Client) DeployVolume(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group) error {
+func (_mock *Client) DeployVolume(ctx context.Context, lid v1.LeaseID, group *v1beta4.Group) error {
 	ret := _mock.Called(ctx, lid, group)
 
 	if len(ret) == 0 {
@@ -465,7 +465,7 @@ func (_mock *Client) DeployVolume(ctx context.Context, lid v1.LeaseID, group *v1
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, *v1beta5.Group) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, *v1beta4.Group) error); ok {
 		r0 = returnFunc(ctx, lid, group)
 	} else {
 		r0 = ret.Error(0)
@@ -481,12 +481,12 @@ type Client_DeployVolume_Call struct {
 // DeployVolume is a helper method to define mock.On call
 //   - ctx context.Context
 //   - lid v1.LeaseID
-//   - group *v1beta5.Group
+//   - group *v1beta4.Group
 func (_e *Client_Expecter) DeployVolume(ctx interface{}, lid interface{}, group interface{}) *Client_DeployVolume_Call {
 	return &Client_DeployVolume_Call{Call: _e.mock.On("DeployVolume", ctx, lid, group)}
 }
 
-func (_c *Client_DeployVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group)) *Client_DeployVolume_Call {
+func (_c *Client_DeployVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID, group *v1beta4.Group)) *Client_DeployVolume_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -496,9 +496,9 @@ func (_c *Client_DeployVolume_Call) Run(run func(ctx context.Context, lid v1.Lea
 		if args[1] != nil {
 			arg1 = args[1].(v1.LeaseID)
 		}
-		var arg2 *v1beta5.Group
+		var arg2 *v1beta4.Group
 		if args[2] != nil {
-			arg2 = args[2].(*v1beta5.Group)
+			arg2 = args[2].(*v1beta4.Group)
 		}
 		run(
 			arg0,
@@ -514,7 +514,7 @@ func (_c *Client_DeployVolume_Call) Return(err error) *Client_DeployVolume_Call 
 	return _c
 }
 
-func (_c *Client_DeployVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID, group *v1beta5.Group) error) *Client_DeployVolume_Call {
+func (_c *Client_DeployVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID, group *v1beta4.Group) error) *Client_DeployVolume_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1626,7 +1626,7 @@ func (_c *Client_PurgeDeclaredHostnames_Call) RunAndReturn(run func(ctx context.
 }
 
 // PurgeDeclaredIP provides a mock function for the type Client
-func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol) error {
+func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol) error {
 	ret := _mock.Called(ctx, lID, serviceName, externalPort, proto)
 
 	if len(ret) == 0 {
@@ -1634,7 +1634,7 @@ func (_mock *Client) PurgeDeclaredIP(ctx context.Context, lID v1.LeaseID, servic
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, v2beta4.ServiceProtocol) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID, string, uint32, v2beta3.ServiceProtocol) error); ok {
 		r0 = returnFunc(ctx, lID, serviceName, externalPort, proto)
 	} else {
 		r0 = ret.Error(0)
@@ -1652,12 +1652,12 @@ type Client_PurgeDeclaredIP_Call struct {
 //   - lID v1.LeaseID
 //   - serviceName string
 //   - externalPort uint32
-//   - proto v2beta4.ServiceProtocol
+//   - proto v2beta3.ServiceProtocol
 func (_e *Client_Expecter) PurgeDeclaredIP(ctx interface{}, lID interface{}, serviceName interface{}, externalPort interface{}, proto interface{}) *Client_PurgeDeclaredIP_Call {
 	return &Client_PurgeDeclaredIP_Call{Call: _e.mock.On("PurgeDeclaredIP", ctx, lID, serviceName, externalPort, proto)}
 }
 
-func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol)) *Client_PurgeDeclaredIP_Call {
+func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol)) *Client_PurgeDeclaredIP_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1675,9 +1675,9 @@ func (_c *Client_PurgeDeclaredIP_Call) Run(run func(ctx context.Context, lID v1.
 		if args[3] != nil {
 			arg3 = args[3].(uint32)
 		}
-		var arg4 v2beta4.ServiceProtocol
+		var arg4 v2beta3.ServiceProtocol
 		if args[4] != nil {
-			arg4 = args[4].(v2beta4.ServiceProtocol)
+			arg4 = args[4].(v2beta3.ServiceProtocol)
 		}
 		run(
 			arg0,
@@ -1695,7 +1695,7 @@ func (_c *Client_PurgeDeclaredIP_Call) Return(err error) *Client_PurgeDeclaredIP
 	return _c
 }
 
-func (_c *Client_PurgeDeclaredIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta4.ServiceProtocol) error) *Client_PurgeDeclaredIP_Call {
+func (_c *Client_PurgeDeclaredIP_Call) RunAndReturn(run func(ctx context.Context, lID v1.LeaseID, serviceName string, externalPort uint32, proto v2beta3.ServiceProtocol) error) *Client_PurgeDeclaredIP_Call {
 	_c.Call.Return(run)
 	return _c
 }

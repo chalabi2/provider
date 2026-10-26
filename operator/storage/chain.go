@@ -14,9 +14,9 @@ import (
 
 	aclient "pkg.akt.dev/go/node/client"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 )
 
 // ChainClient is the operator's chain surface: adoption verification for

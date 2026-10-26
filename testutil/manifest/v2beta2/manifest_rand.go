@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	manifest "pkg.akt.dev/go/manifest/v2beta4"
+	manifest "pkg.akt.dev/go/manifest/v2beta3"
 	atestutil "pkg.akt.dev/go/testutil"
 )
 

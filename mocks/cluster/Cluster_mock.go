@@ -7,7 +7,7 @@ package cluster
 import (
 	"github.com/akash-network/provider/cluster/types/v1beta3"
 	mock "github.com/stretchr/testify/mock"
-	"pkg.akt.dev/go/node/deployment/v1beta5"
+	"pkg.akt.dev/go/node/deployment/v1beta4"
 	"pkg.akt.dev/go/node/market/v1"
 )
 
@@ -39,26 +39,26 @@ func (_m *Cluster) EXPECT() *Cluster_Expecter {
 }
 
 // CheckResize provides a mock function for the type Cluster
-func (_mock *Cluster) CheckResize(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error) {
+func (_mock *Cluster) CheckResize(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta4.ResourceUnits, error) {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CheckResize")
 	}
 
-	var r0 v1beta5.ResourceUnits
+	var r0 v1beta4.ResourceUnits
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) (v1beta4.ResourceUnits, error)); ok {
 		return returnFunc(orderID, resourceGroup)
 	}
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) v1beta5.ResourceUnits); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) v1beta4.ResourceUnits); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(v1beta5.ResourceUnits)
+			r0 = ret.Get(0).(v1beta4.ResourceUnits)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
 		r1 = returnFunc(orderID, resourceGroup)
 	} else {
 		r1 = ret.Error(1)
@@ -73,20 +73,20 @@ type Cluster_CheckResize_Call struct {
 
 // CheckResize is a helper method to define mock.On call
 //   - orderID v1.OrderID
-//   - resourceGroup v1beta5.ResourceGroup
+//   - resourceGroup v1beta4.ResourceGroup
 func (_e *Cluster_Expecter) CheckResize(orderID interface{}, resourceGroup interface{}) *Cluster_CheckResize_Call {
 	return &Cluster_CheckResize_Call{Call: _e.mock.On("CheckResize", orderID, resourceGroup)}
 }
 
-func (_c *Cluster_CheckResize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Cluster_CheckResize_Call {
+func (_c *Cluster_CheckResize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup)) *Cluster_CheckResize_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 v1.OrderID
 		if args[0] != nil {
 			arg0 = args[0].(v1.OrderID)
 		}
-		var arg1 v1beta5.ResourceGroup
+		var arg1 v1beta4.ResourceGroup
 		if args[1] != nil {
-			arg1 = args[1].(v1beta5.ResourceGroup)
+			arg1 = args[1].(v1beta4.ResourceGroup)
 		}
 		run(
 			arg0,
@@ -96,18 +96,18 @@ func (_c *Cluster_CheckResize_Call) Run(run func(orderID v1.OrderID, resourceGro
 	return _c
 }
 
-func (_c *Cluster_CheckResize_Call) Return(resourceUnits v1beta5.ResourceUnits, err error) *Cluster_CheckResize_Call {
+func (_c *Cluster_CheckResize_Call) Return(resourceUnits v1beta4.ResourceUnits, err error) *Cluster_CheckResize_Call {
 	_c.Call.Return(resourceUnits, err)
 	return _c
 }
 
-func (_c *Cluster_CheckResize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error)) *Cluster_CheckResize_Call {
+func (_c *Cluster_CheckResize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta4.ResourceUnits, error)) *Cluster_CheckResize_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Reserve provides a mock function for the type Cluster
-func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error) {
+func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error) {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
@@ -116,17 +116,17 @@ func (_mock *Cluster) Reserve(orderID v1.OrderID, resourceGroup v1beta5.Resource
 
 	var r0 v1beta3.Reservation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) (v1beta3.Reservation, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) (v1beta3.Reservation, error)); ok {
 		return returnFunc(orderID, resourceGroup)
 	}
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) v1beta3.Reservation); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) v1beta3.Reservation); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(v1beta3.Reservation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
 		r1 = returnFunc(orderID, resourceGroup)
 	} else {
 		r1 = ret.Error(1)
@@ -141,20 +141,20 @@ type Cluster_Reserve_Call struct {
 
 // Reserve is a helper method to define mock.On call
 //   - orderID v1.OrderID
-//   - resourceGroup v1beta5.ResourceGroup
+//   - resourceGroup v1beta4.ResourceGroup
 func (_e *Cluster_Expecter) Reserve(orderID interface{}, resourceGroup interface{}) *Cluster_Reserve_Call {
 	return &Cluster_Reserve_Call{Call: _e.mock.On("Reserve", orderID, resourceGroup)}
 }
 
-func (_c *Cluster_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Cluster_Reserve_Call {
+func (_c *Cluster_Reserve_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup)) *Cluster_Reserve_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 v1.OrderID
 		if args[0] != nil {
 			arg0 = args[0].(v1.OrderID)
 		}
-		var arg1 v1beta5.ResourceGroup
+		var arg1 v1beta4.ResourceGroup
 		if args[1] != nil {
-			arg1 = args[1].(v1beta5.ResourceGroup)
+			arg1 = args[1].(v1beta4.ResourceGroup)
 		}
 		run(
 			arg0,
@@ -169,13 +169,13 @@ func (_c *Cluster_Reserve_Call) Return(reservation v1beta3.Reservation, err erro
 	return _c
 }
 
-func (_c *Cluster_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error)) *Cluster_Reserve_Call {
+func (_c *Cluster_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (v1beta3.Reservation, error)) *Cluster_Reserve_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Resize provides a mock function for the type Cluster
-func (_mock *Cluster) Resize(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) error {
+func (_mock *Cluster) Resize(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) error {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
@@ -183,7 +183,7 @@ func (_mock *Cluster) Resize(orderID v1.OrderID, resourceGroup v1beta5.ResourceG
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
 		r0 = ret.Error(0)
@@ -198,20 +198,20 @@ type Cluster_Resize_Call struct {
 
 // Resize is a helper method to define mock.On call
 //   - orderID v1.OrderID
-//   - resourceGroup v1beta5.ResourceGroup
+//   - resourceGroup v1beta4.ResourceGroup
 func (_e *Cluster_Expecter) Resize(orderID interface{}, resourceGroup interface{}) *Cluster_Resize_Call {
 	return &Cluster_Resize_Call{Call: _e.mock.On("Resize", orderID, resourceGroup)}
 }
 
-func (_c *Cluster_Resize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Cluster_Resize_Call {
+func (_c *Cluster_Resize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup)) *Cluster_Resize_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 v1.OrderID
 		if args[0] != nil {
 			arg0 = args[0].(v1.OrderID)
 		}
-		var arg1 v1beta5.ResourceGroup
+		var arg1 v1beta4.ResourceGroup
 		if args[1] != nil {
-			arg1 = args[1].(v1beta5.ResourceGroup)
+			arg1 = args[1].(v1beta4.ResourceGroup)
 		}
 		run(
 			arg0,
@@ -226,7 +226,7 @@ func (_c *Cluster_Resize_Call) Return(err error) *Cluster_Resize_Call {
 	return _c
 }
 
-func (_c *Cluster_Resize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) error) *Cluster_Resize_Call {
+func (_c *Cluster_Resize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) error) *Cluster_Resize_Call {
 	_c.Call.Return(run)
 	return _c
 }

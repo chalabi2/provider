@@ -6,7 +6,7 @@ import (
 	"time"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	provider "pkg.akt.dev/go/provider/v1"
 	"pkg.akt.dev/go/sdl"
 )

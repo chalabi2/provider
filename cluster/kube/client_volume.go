@@ -10,9 +10,9 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	mapi "pkg.akt.dev/go/manifest/v2beta4"
+	mapi "pkg.akt.dev/go/manifest/v2beta3"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 
 	"github.com/akash-network/provider/cluster/kube/builder"
