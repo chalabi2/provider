@@ -50,6 +50,7 @@ func newManager(h *service, daddr dtypes.DeploymentID) *manager {
 		bus:             h.bus,
 		leasech:         make(chan event.LeaseWon),
 		rmleasech:       make(chan mtypes.LeaseID),
+		resizech:        make(chan mtypes.LeaseID),
 		manifestch:      make(chan manifestRequest),
 		updatech:        make(chan []byte),
 		log:             session.Log().With("did", daddr),
@@ -73,6 +74,7 @@ type manager struct {
 
 	leasech    chan event.LeaseWon
 	rmleasech  chan mtypes.LeaseID
+	resizech   chan mtypes.LeaseID
 	manifestch chan manifestRequest
 	updatech   chan []byte
 
@@ -111,6 +113,14 @@ func (m *manager) removeLease(id mtypes.LeaseID) {
 	case m.rmleasech <- id:
 	case <-m.lc.ShuttingDown():
 		m.log.Error("not running: remove lease", "lid", id)
+	}
+}
+
+func (m *manager) handleResize(id mtypes.LeaseID) {
+	select {
+	case m.resizech <- id:
+	case <-m.lc.ShuttingDown():
+		m.log.Error("not running: lease resize", "lid", id)
 	}
 }
 
@@ -175,6 +185,11 @@ loop:
 			m.log.Info("lease removed", "lid", id)
 			m.clearFetched()
 			m.maybeScheduleStop()
+		case id := <-m.resizech:
+			// the cached groups predate the resize; the next manifest has to
+			// match the resized group
+			m.log.Info("lease resized", "lid", id)
+			m.clearFetched()
 		case req := <-m.manifestch:
 			m.log.Info("manifest received")
 

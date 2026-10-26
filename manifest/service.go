@@ -294,6 +294,16 @@ loop:
 					s.session.Log().Info("lease closed", "lid", ev.ID)
 					manager.removeLease(ev.ID)
 				}
+			case *mtypes.EventLeaseResized:
+				if ev.ID.GetProvider() != s.session.Provider().Address().String() {
+					continue
+				}
+
+				key := dquery.DeploymentPath(ev.ID.DeploymentID())
+				if manager := s.managers[key]; manager != nil {
+					s.session.Log().Info("lease resized", "lid", ev.ID)
+					manager.handleResize(ev.ID)
+				}
 			}
 		case check := <-s.activeCheckCh:
 			_, ok := s.managers[dquery.DeploymentPath(check.Deployment)]
