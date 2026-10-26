@@ -37,7 +37,6 @@ import (
 	clmocks "github.com/akash-network/provider/mocks/cluster/types"
 	"github.com/akash-network/provider/operator/waiter"
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 	"github.com/akash-network/provider/tools/fromctx"
 	"github.com/akash-network/provider/tools/logging/logtest"
 )
@@ -123,7 +122,7 @@ func makeMocks(s *orderTestScaffold, groupResult *dvbeta.QueryGroupResponse) {
 
 	queryMocks.On("ClientContext").Return(sdkclient.Context{HomeDir: homeDir}, nil)
 	queryMocks.On("Deployment").Return(deplMocks, nil)
-	queryMocks.On("Market").Return(chainmock.Market{QueryClient: marketMocks}, nil)
+	queryMocks.On("Market").Return(marketMocks, nil)
 	queryMocks.On("Provider").Return(providerMocks, nil)
 
 	txMocks := &clientmocks.TxClient{}

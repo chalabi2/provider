@@ -26,7 +26,6 @@ import (
 
 	"github.com/akash-network/provider/event"
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 )
 
 type balanceTestSubscriber struct {
@@ -60,7 +59,7 @@ func TestBalanceCheckerPreservesNonterminalAndUncertainLeases(t *testing.T) {
 			client.On("Node").Return(node)
 			node.On("SyncInfo", mock.Anything).Return(&tmrpc.SyncInfo{CatchingUp: tc.catchingUp}, nil)
 			if !tc.catchingUp {
-				query.On("Market").Return(chainmock.Market{QueryClient: market})
+				query.On("Market").Return(market)
 				lease := mtypes.Lease{ID: lid, State: tc.state}
 				if tc.wrongID {
 					lease.ID.DSeq++
@@ -127,7 +126,7 @@ func TestBalanceCheckerReclaimingLeaseFunds(t *testing.T) {
 			deployment := deploymentmocks.NewQueryClient(t)
 			client.On("Node").Return(node)
 			node.On("SyncInfo", mock.Anything).Return(&tmrpc.SyncInfo{LatestBlockHeight: 200}, nil)
-			query.On("Market").Return(chainmock.Market{QueryClient: market})
+			query.On("Market").Return(market)
 			market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 				&mvbeta.QueryLeaseResponse{Lease: lease}, nil).Once()
 			query.On("Deployment").Return(deployment)
@@ -190,7 +189,7 @@ func TestBalanceCheckerReconcilesClosedLease(t *testing.T) {
 			deployment := deploymentmocks.NewQueryClient(t)
 			client.On("Node").Return(node)
 			node.On("SyncInfo", mock.Anything).Return(&tmrpc.SyncInfo{}, nil)
-			query.On("Market").Return(chainmock.Market{QueryClient: market})
+			query.On("Market").Return(market)
 			market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 				&mvbeta.QueryLeaseResponse{Lease: mtypes.Lease{ID: lid, State: state, Reason: mtypes.LeaseClosedReasonOwner}}, nil).Once()
 			// A closed deployment's balance is irrelevant to local lease cleanup.

@@ -22,7 +22,6 @@ import (
 	"github.com/akash-network/provider/event"
 	cmocks "github.com/akash-network/provider/mocks/cluster"
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 )
 
 func TestDeploymentManagerCleansUpClosedLeaseOnRecovery(t *testing.T) {
@@ -45,7 +44,7 @@ func testDeploymentManagerRecovery(t *testing.T, failFirstTeardown bool) {
 	query := clientmocks.NewQueryClient(t)
 	market := marketmocks.NewQueryClient(t)
 	client.On("Query").Return(query)
-	query.On("Market").Return(chainmock.Market{QueryClient: market})
+	query.On("Market").Return(market)
 	market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 		&mvbeta.QueryLeaseResponse{Lease: mv1.Lease{ID: lid, State: mv1.LeaseClosed}}, nil).Once()
 	kube := cmocks.NewClient(t)
@@ -104,7 +103,7 @@ func TestDeploymentManagerDoesNotTreatMissingLeaseAsClosed(t *testing.T) {
 	query := clientmocks.NewQueryClient(t)
 	market := marketmocks.NewQueryClient(t)
 	client.On("Query").Return(query)
-	query.On("Market").Return(chainmock.Market{QueryClient: market})
+	query.On("Market").Return(market)
 	market.On("Lease", mock.Anything, mock.Anything).Return(nil, mv1.ErrLeaseNotFound).Once()
 	dm := &deploymentManager{
 		session: session.New(log.NewNopLogger(), client, nil, 0), log: log.NewNopLogger(),
@@ -140,7 +139,7 @@ func TestDeploymentManagerLeaseState(t *testing.T) {
 			query := clientmocks.NewQueryClient(t)
 			market := marketmocks.NewQueryClient(t)
 			client.On("Query").Return(query)
-			query.On("Market").Return(chainmock.Market{QueryClient: market})
+			query.On("Market").Return(market)
 			market.On("Lease", mock.Anything, &mvbeta.QueryLeaseRequest{ID: lid}).Return(
 				&mvbeta.QueryLeaseResponse{Lease: lease}, nil).Once()
 			dm := &deploymentManager{

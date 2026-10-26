@@ -33,7 +33,6 @@ import (
 	cmocks "github.com/akash-network/provider/mocks/cluster"
 	"github.com/akash-network/provider/operator/waiter"
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 	"github.com/akash-network/provider/tools/fromctx"
 )
 
@@ -125,7 +124,7 @@ func makeResizeForTest(t *testing.T, group dvbeta.Group, resources dvbeta.Resour
 
 	query := &clientmocks.QueryClient{}
 	query.On("Deployment").Return(s.deployments)
-	query.On("Market").Return(chainmock.Market{QueryClient: s.market})
+	query.On("Market").Return(s.market)
 
 	client := &clientmocks.Client{}
 	client.On("Query").Return(query)
@@ -375,7 +374,7 @@ func (s *resizeServiceScaffold) start(t *testing.T, catchUp, pending []mvbeta.Le
 
 	query := &clientmocks.QueryClient{}
 	query.On("Deployment").Return(deployments)
-	query.On("Market").Return(chainmock.Market{QueryClient: market})
+	query.On("Market").Return(market)
 	query.On("Provider").Return(providers)
 
 	tx := &clientmocks.TxClient{}

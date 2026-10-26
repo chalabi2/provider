@@ -25,7 +25,6 @@ import (
 	mquery "pkg.akt.dev/node/v2/x/market/query"
 
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 	"github.com/akash-network/provider/tools/fromctx"
 	"github.com/akash-network/provider/tools/pconfig"
 	"github.com/akash-network/provider/tools/pconfig/bbolt"
@@ -57,7 +56,7 @@ func newOrdersFetcherScaffoldWithStorage(t *testing.T, pcfg pconfig.Storage) *or
 
 	market := &marketmocks.QueryClient{}
 	aqc := &clientmocks.QueryClient{}
-	aqc.On("Market").Return(chainmock.Market{QueryClient: market})
+	aqc.On("Market").Return(market)
 
 	provider := &ptypes.Provider{Owner: testutil.AccAddress(t).String()}
 

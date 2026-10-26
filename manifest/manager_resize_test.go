@@ -22,7 +22,6 @@ import (
 
 	"github.com/akash-network/provider/event"
 	"github.com/akash-network/provider/session"
-	"github.com/akash-network/provider/testutil/chainmock"
 	"github.com/akash-network/provider/tools/fromctx"
 	"github.com/akash-network/provider/tools/logging/logtest"
 )
@@ -71,7 +70,7 @@ func TestManagerRefetchesAfterLeaseResize(t *testing.T) {
 
 	query := &clientmocks.QueryClient{}
 	query.On("Deployment").Return(deployments)
-	query.On("Market").Return(chainmock.Market{QueryClient: market})
+	query.On("Market").Return(market)
 
 	client := &clientmocks.Client{}
 	client.On("Query").Return(query)
