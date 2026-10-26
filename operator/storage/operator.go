@@ -386,6 +386,8 @@ func (op *storageOperator) applyChainEventOnce(ctx context.Context, ev interface
 		return op.applyLeaseClosed(ctx, ev.ID)
 	case *mv1.EventLeaseReclaimStarted:
 		return op.applyReclaimStarted(ctx, ev)
+	case *mv1.EventLeaseResized:
+		return op.applyLeaseResized(ctx, ev.ID)
 	case *mv1.EventVolumeAttached:
 		return op.applyAttachment(ctx, ev.Volume, ev.LeaseID.String())
 	case *mv1.EventVolumeDetached:
@@ -475,6 +477,50 @@ func (op *storageOperator) applyReclaimStarted(ctx context.Context, ev *mv1.Even
 		}
 
 		return nil
+	}
+
+	return nil
+}
+
+// applyLeaseResized records the size the chain now holds for a resized
+// volume lease; the reconciler then grows the claim. The daemon records the
+// resize as well, through DeployVolume, so this covers a daemon that missed
+// the event. Like DeployVolume it never lowers the recorded size.
+func (op *storageOperator) applyLeaseResized(ctx context.Context, lid mv1.LeaseID) error {
+	if op.chain == nil {
+		return nil
+	}
+
+	list, err := op.ac.AkashV2beta2().Volumes(op.ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for i := range list.Items {
+		vol := &list.Items[i]
+
+		vlid, err := vol.Spec.LeaseID.FromCRD()
+		if err != nil || !vlid.Equals(lid) {
+			continue
+		}
+
+		size, err := op.chain.VolumeSize(ctx, lid.GroupID())
+		if err != nil {
+			return err
+		}
+
+		if cur, err := strconv.ParseUint(vol.Spec.Size, 10, 64); err == nil && size <= cur {
+			return nil
+		}
+
+		uvol := vol.DeepCopy()
+		uvol.Spec.Size = strconv.FormatUint(size, 10)
+
+		op.log.Info("volume resize recorded", "volume", vol.Name, "size", uvol.Spec.Size)
+
+		_, err = op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
+
+		return err
 	}
 
 	return nil

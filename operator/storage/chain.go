@@ -32,9 +32,13 @@ type ChainClient interface {
 	// orders checkpoint (pconfig GetOrdersNextKey).
 	ActiveLeases(ctx context.Context) (map[string]bool, error)
 
+	// VolumeSize returns the storage size the chain holds for a volume
+	// group, which a lease resize may have grown.
+	VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, error)
+
 	// Events streams the AEP-87 relevant chain events: EventLeaseClosed,
-	// EventLeaseReclaimStarted, EventVolumeAttached, EventVolumeDetached,
-	// EventVolumeAdopted.
+	// EventLeaseReclaimStarted, EventLeaseResized, EventVolumeAttached,
+	// EventVolumeDetached, EventVolumeAdopted.
 	Events(ctx context.Context, name string) (<-chan interface{}, error)
 }
 
@@ -99,6 +103,20 @@ func (c *chainClient) ActiveLeases(ctx context.Context) (map[string]bool, error)
 	}
 
 	return active, nil
+}
+
+func (c *chainClient) VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, error) {
+	resp, err := c.qc.Deployment().Group(ctx, &dtypes.QueryGroupRequest{ID: id})
+	if err != nil {
+		return 0, err
+	}
+
+	gspec := resp.Group.GroupSpec
+	if gspec.Volume == nil || len(gspec.Resources) != 1 || len(gspec.Resources[0].Storage) != 1 {
+		return 0, fmt.Errorf("%w: group %s is not a volume group", ErrVolumeOperator, id)
+	}
+
+	return gspec.Resources[0].Storage[0].Quantity.Value(), nil
 }
 
 // Events subscribes to new-block headers and decodes the volume-relevant
@@ -208,6 +226,7 @@ func processEvent(bev abci.Event) (interface{}, bool) {
 		default:
 			return nil, false
 		}
+	case *mv1.EventLeaseResized:
 	case *mv1.EventVolumeAttached:
 	case *mv1.EventVolumeDetached:
 	case *dv1.EventVolumeAdopted:

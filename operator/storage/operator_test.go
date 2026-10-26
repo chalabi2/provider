@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	sdkmath "cosmossdk.io/math"
+	abci "github.com/cometbft/cometbft/abci/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,10 +34,18 @@ type opScaffold struct {
 type fakeChainClient struct {
 	fakeChain
 	active map[string]bool
+
+	size      uint64
+	sizeCalls int
 }
 
 func (f *fakeChainClient) ActiveLeases(_ context.Context) (map[string]bool, error) {
 	return f.active, nil
+}
+
+func (f *fakeChainClient) VolumeSize(_ context.Context, _ dv1.GroupID) (uint64, error) {
+	f.sizeCalls++
+	return f.size, nil
 }
 
 func (f *fakeChainClient) Events(_ context.Context, _ string) (<-chan interface{}, error) {
@@ -347,6 +358,63 @@ func TestApplyChainEventRetriesOnConflict(t *testing.T) {
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, strconv.FormatUint(newDSeq, 10), uvol.Spec.GroupID.DSeq)
 	require.Equal(t, crd.VolumePhaseAdopting, uvol.Status.Phase)
+}
+
+func TestProcessEventPassesLeaseResized(t *testing.T) {
+	ev := &mv1.EventLeaseResized{
+		ID:        testutil.LeaseID(t),
+		Price:     sdk.NewDecCoin("uact", sdkmath.NewInt(2)),
+		PrevPrice: sdk.NewDecCoin("uact", sdkmath.NewInt(1)),
+	}
+
+	bev, err := sdk.TypedEventToEvent(ev)
+	require.NoError(t, err)
+
+	decoded, ok := processEvent(abci.Event(bev))
+	require.True(t, ok)
+	require.Equal(t, ev, decoded)
+}
+
+func TestApplyLeaseResizedGrowsVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseAttached)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{size: 322122547200}
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventLeaseResized{ID: lid}))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, "322122547200", uvol.Spec.Size)
+	require.Equal(t, crd.VolumePhaseAttached, uvol.Status.Phase)
+}
+
+func TestApplyLeaseResizedNeverShrinksVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{size: 107374182400}
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventLeaseResized{ID: lid}))
+	require.Equal(t, vol.Spec.Size, getOpVolume(t, s, vol.Name).Spec.Size)
+}
+
+func TestApplyLeaseResizedIgnoresComputeLeases(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseAttached)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{size: 322122547200}
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	// a lease no volume is recorded under, such as the attached compute lease
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventLeaseResized{ID: testutil.LeaseID(t)}))
+
+	require.Equal(t, 0, chain.sizeCalls)
+	require.Equal(t, vol.Spec.Size, getOpVolume(t, s, vol.Name).Spec.Size)
 }
 
 func TestResyncChainHealsMissedClose(t *testing.T) {
