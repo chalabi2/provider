@@ -44,6 +44,74 @@ func (_m *Service) EXPECT() *Service_Expecter {
 	return &Service_Expecter{mock: &_m.Mock}
 }
 
+// CheckResize provides a mock function for the type Service
+func (_mock *Service) CheckResize(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error) {
+	ret := _mock.Called(orderID, resourceGroup)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CheckResize")
+	}
+
+	var r0 v1beta5.ResourceUnits
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error)); ok {
+		return returnFunc(orderID, resourceGroup)
+	}
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) v1beta5.ResourceUnits); ok {
+		r0 = returnFunc(orderID, resourceGroup)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(v1beta5.ResourceUnits)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
+		r1 = returnFunc(orderID, resourceGroup)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// Service_CheckResize_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CheckResize'
+type Service_CheckResize_Call struct {
+	*mock.Call
+}
+
+// CheckResize is a helper method to define mock.On call
+//   - orderID v1.OrderID
+//   - resourceGroup v1beta5.ResourceGroup
+func (_e *Service_Expecter) CheckResize(orderID interface{}, resourceGroup interface{}) *Service_CheckResize_Call {
+	return &Service_CheckResize_Call{Call: _e.mock.On("CheckResize", orderID, resourceGroup)}
+}
+
+func (_c *Service_CheckResize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Service_CheckResize_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 v1.OrderID
+		if args[0] != nil {
+			arg0 = args[0].(v1.OrderID)
+		}
+		var arg1 v1beta5.ResourceGroup
+		if args[1] != nil {
+			arg1 = args[1].(v1beta5.ResourceGroup)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *Service_CheckResize_Call) Return(resourceUnits v1beta5.ResourceUnits, err error) *Service_CheckResize_Call {
+	_c.Call.Return(resourceUnits, err)
+	return _c
+}
+
+func (_c *Service_CheckResize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta5.ResourceUnits, error)) *Service_CheckResize_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function for the type Service
 func (_mock *Service) Close() error {
 	ret := _mock.Called()
@@ -380,6 +448,63 @@ func (_c *Service_Reserve_Call) Return(reservation v1beta3.Reservation, err erro
 }
 
 func (_c *Service_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) (v1beta3.Reservation, error)) *Service_Reserve_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Resize provides a mock function for the type Service
+func (_mock *Service) Resize(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) error {
+	ret := _mock.Called(orderID, resourceGroup)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Resize")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta5.ResourceGroup) error); ok {
+		r0 = returnFunc(orderID, resourceGroup)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// Service_Resize_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Resize'
+type Service_Resize_Call struct {
+	*mock.Call
+}
+
+// Resize is a helper method to define mock.On call
+//   - orderID v1.OrderID
+//   - resourceGroup v1beta5.ResourceGroup
+func (_e *Service_Expecter) Resize(orderID interface{}, resourceGroup interface{}) *Service_Resize_Call {
+	return &Service_Resize_Call{Call: _e.mock.On("Resize", orderID, resourceGroup)}
+}
+
+func (_c *Service_Resize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup)) *Service_Resize_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 v1.OrderID
+		if args[0] != nil {
+			arg0 = args[0].(v1.OrderID)
+		}
+		var arg1 v1beta5.ResourceGroup
+		if args[1] != nil {
+			arg1 = args[1].(v1beta5.ResourceGroup)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *Service_Resize_Call) Return(err error) *Service_Resize_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *Service_Resize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta5.ResourceGroup) error) *Service_Resize_Call {
 	_c.Call.Return(run)
 	return _c
 }

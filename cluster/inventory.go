@@ -42,8 +42,8 @@ import (
 )
 
 var (
-	// errReservationNotFound is the new error with message "not found"
-	errReservationNotFound = errors.New("reservation not found")
+	// ErrReservationNotFound reports that no reservation is held for the order.
+	ErrReservationNotFound = errors.New("reservation not found")
 	// errReservationDurable reports an unreserve that was declined because
 	// the reservation is durable (AEP-87 volume) and allocated: the leased
 	// bytes outlive the lease and are released only on volume GC.
@@ -90,6 +90,16 @@ type inventoryRequest struct {
 	ch        chan<- inventoryResponse
 }
 
+// resizeRequest moves the reservation held for an order to the resources of
+// a lease resize. A dry run only checks the new size against the current
+// snapshot and leaves the reservation untouched.
+type resizeRequest struct {
+	order     mtypes.OrderID
+	resources dtypes.ResourceGroup
+	dryRun    bool
+	ch        chan<- inventoryResponse
+}
+
 type inventoryResponse struct {
 	value ctypes.Reservation
 	err   error
@@ -104,6 +114,7 @@ type inventoryService struct {
 	lookupch               chan inventoryRequest
 	reservech              chan inventoryRequest
 	unreservech            chan inventoryRequest
+	resizech               chan resizeRequest
 	reservationCount       int64
 	readych                chan struct{}
 	log                    log.Logger
@@ -142,6 +153,7 @@ func newInventoryService(
 		lookupch:               make(chan inventoryRequest),
 		reservech:              make(chan inventoryRequest),
 		unreservech:            make(chan inventoryRequest),
+		resizech:               make(chan resizeRequest),
 		readych:                make(chan struct{}),
 		log:                    log.With("module", "inventory-service"),
 		lc:                     lifecycle.New(),
@@ -208,17 +220,27 @@ func (is *inventoryService) lookup(order mtypes.OrderID, resources dtypes.Resour
 	}
 }
 
-func (is *inventoryService) reserve(order mtypes.OrderID, resources dtypes.ResourceGroup) (ctypes.Reservation, error) {
+// checkResourceUnits rejects units with a nil CPU, GPU or memory, which
+// Adjust dereferences.
+func checkResourceUnits(resources dtypes.ResourceGroup) error {
 	for idx, res := range resources.GetResourceUnits() {
 		if res.CPU == nil {
-			return nil, fmt.Errorf("%w: CPU resource at idx %d is nil", ErrInvalidResource, idx)
+			return fmt.Errorf("%w: CPU resource at idx %d is nil", ErrInvalidResource, idx)
 		}
 		if res.GPU == nil {
-			return nil, fmt.Errorf("%w: GPU resource at idx %d is nil", ErrInvalidResource, idx)
+			return fmt.Errorf("%w: GPU resource at idx %d is nil", ErrInvalidResource, idx)
 		}
 		if res.Memory == nil {
-			return nil, fmt.Errorf("%w: Memory resource at idx %d is nil", ErrInvalidResource, idx)
+			return fmt.Errorf("%w: Memory resource at idx %d is nil", ErrInvalidResource, idx)
 		}
+	}
+
+	return nil
+}
+
+func (is *inventoryService) reserve(order mtypes.OrderID, resources dtypes.ResourceGroup) (ctypes.Reservation, error) {
+	if err := checkResourceUnits(resources); err != nil {
+		return nil, err
 	}
 
 	ch := make(chan inventoryResponse, 1)
@@ -258,6 +280,46 @@ func (is *inventoryService) unreserve(order mtypes.OrderID) error { // nolint: u
 		return response.err
 	case <-is.lc.ShuttingDown():
 		return ErrNotRunning
+	}
+}
+
+// checkResize returns the resources the reservation held for order would be
+// allocated at the new size, or the error that keeps the size from fitting.
+// The reservation itself is left as it is.
+func (is *inventoryService) checkResize(order mtypes.OrderID, resources dtypes.ResourceGroup) (dtypes.ResourceUnits, error) {
+	res, err := is.resizeReservation(order, resources, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.GetAllocatedResources(), nil
+}
+
+// resize swaps the reservation held for order to the new size.
+func (is *inventoryService) resize(order mtypes.OrderID, resources dtypes.ResourceGroup) error {
+	_, err := is.resizeReservation(order, resources, false)
+	return err
+}
+
+func (is *inventoryService) resizeReservation(order mtypes.OrderID, resources dtypes.ResourceGroup, dryRun bool) (ctypes.Reservation, error) {
+	if err := checkResourceUnits(resources); err != nil {
+		return nil, err
+	}
+
+	ch := make(chan inventoryResponse, 1)
+	req := resizeRequest{
+		order:     order,
+		resources: resources,
+		dryRun:    dryRun,
+		ch:        ch,
+	}
+
+	select {
+	case is.resizech <- req:
+		response := <-ch
+		return response.value, response.err
+	case <-is.lc.ShuttingDown():
+		return nil, ErrNotRunning
 	}
 }
 
@@ -611,6 +673,163 @@ func (is *inventoryService) handleRequest(req inventoryRequest, state *inventory
 	inventoryRequestsCounter.WithLabelValues("reserve", "create").Inc()
 }
 
+func findReservation(reservations []*reservation, order mtypes.OrderID) *reservation {
+	for _, res := range reservations {
+		if res.OrderID().Equals(order) {
+			return res
+		}
+	}
+
+	return nil
+}
+
+// resizedReservation is the reservation the order would hold at the resized
+// group, committed the same way as a new reservation.
+func (is *inventoryService) resizedReservation(req resizeRequest) *reservation {
+	next := newReservation(req.order, is.resourcesToCommit(req.resources))
+	next.teeType = teeTypeFromResourceGroup(req.resources)
+
+	return next
+}
+
+// handleResizeCheck dry-runs a lease resize against the current snapshot.
+//
+// The check is conservative. The snapshot still counts the lease's running
+// pods, and a reservation does not record the nodes its pods landed on, so
+// the old size cannot be credited back: the new size has to fit next to the
+// old one. That never over-commits, but it declines a resize that would only
+// fit by reusing the old pods' node. A durable (volume) reservation is the
+// exception: its bytes sit in a cluster-wide storage class where they are
+// already counted, so only the growth has to fit.
+func (is *inventoryService) handleResizeCheck(req resizeRequest, state *inventoryServiceState) {
+	log := is.log.With("oid", req.order)
+
+	res := findReservation(state.reservations, req.order)
+	if res == nil {
+		inventoryRequestsCounter.WithLabelValues("resize-check", "not-found").Inc()
+		req.ch <- inventoryResponse{err: ErrReservationNotFound}
+		return
+	}
+
+	if state.inventory == nil {
+		req.ch <- inventoryResponse{err: errInventoryNotAvailableYet}
+		return
+	}
+
+	next := is.resizedReservation(req)
+
+	check := next
+	if res.kind == ctypes.ReservationKindDurable {
+		check = newReservation(req.order, volumeGrowth(res.Resources(), next.Resources()))
+		next.SetAllocatedResources(next.Resources().GetResourceUnits())
+	}
+
+	opts := append(is.adjustOpts(next.teeType), ctypes.WithDryRun())
+	if err := state.inventory.Adjust(check, opts...); err != nil {
+		log.Info("insufficient capacity for resize", "err", err)
+		inventoryRequestsCounter.WithLabelValues("resize-check", "insufficient-capacity").Inc()
+		req.ch <- inventoryResponse{err: err}
+		return
+	}
+
+	inventoryRequestsCounter.WithLabelValues("resize-check", "fits").Inc()
+	req.ch <- inventoryResponse{value: next}
+}
+
+// handleResize swaps the reservation held for the order to the resized group
+// once the chain has applied the resize. The reservation is changed in place
+// so its kind and leased IP confirmation carry over.
+func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServiceState) {
+	log := is.log.With("oid", req.order)
+
+	res := findReservation(state.reservations, req.order)
+	if res == nil {
+		inventoryRequestsCounter.WithLabelValues("resize", "not-found").Inc()
+		req.ch <- inventoryResponse{err: ErrReservationNotFound}
+		return
+	}
+
+	next := is.resizedReservation(req)
+
+	if res.kind == ctypes.ReservationKindDurable {
+		// The volume's bytes are counted in its storage class rather than by
+		// re-adjusting the reservation, and a volume has no scheduler params,
+		// so only the record changes. The reservation stays allocated: that
+		// is what keeps it from being released on lease close.
+		res.resources = next.resources
+		res.adjustedResources = next.Resources().GetResourceUnits()
+
+		log.Info("durable reservation resized")
+		inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
+		req.ch <- inventoryResponse{}
+		return
+	}
+
+	// Adjust stamps the scheduler params per resource unit, and the GPU
+	// params and interconnect units follow the GPU count. If the new size no
+	// longer fits, the chain has applied the resize anyway: the old params
+	// stay until an inventory update re-adjusts the pending reservation.
+	if state.inventory != nil {
+		if err := state.inventory.Adjust(next, is.adjustOpts(next.teeType)...); err != nil {
+			log.Error("adjusting resized reservation", "err", err)
+		} else {
+			res.adjustedResources = next.adjustedResources
+			res.clusterParams = next.clusterParams
+		}
+	}
+
+	res.resources = next.resources
+	res.endpointQuantity = next.endpointQuantity
+	res.teeType = next.teeType
+
+	// Until the tenant's new manifest rolls the pods, the snapshot counts the
+	// old ones. Back to pending, the reservation is re-adjusted at its new
+	// size on every inventory update, on top of them, as during any redeploy;
+	// the deployment monitor marks it allocated again once the new pods are up.
+	if res.allocated {
+		res.allocated = false
+		is.availableExternalPorts += reservationCountEndpoints(res)
+	}
+
+	log.Info("reservation resized")
+	inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
+	req.ch <- inventoryResponse{}
+}
+
+// volumeGrowth is the part of a resized volume group a durable reservation
+// does not hold yet: the group with each storage quantity reduced by the
+// held one. Volume groups carry a single unit with a single storage entry,
+// and a reservation rebuilt from its Volume CRD names that entry after the
+// vid, so entries are matched by position rather than by name.
+func volumeGrowth(held dtypes.ResourceGroup, next dtypes.ResourceGroup) dtypes.GroupSpec {
+	growth := dtypes.GroupSpec{
+		Name:         next.GetName(),
+		Requirements: placementRequirements(next),
+		Resources:    next.GetResourceUnits().Dup(),
+		Volume:       groupVolumePolicy(next),
+	}
+
+	cur := held.GetResourceUnits()
+
+	for i := 0; i < len(growth.Resources) && i < len(cur); i++ {
+		storage := growth.Resources[i].Storage
+
+		for j := 0; j < len(storage) && j < len(cur[i].Storage); j++ {
+			size, heldSize := storage[j].Quantity.Value(), cur[i].Storage[j].Quantity.Value()
+
+			if size > heldSize {
+				size -= heldSize
+			} else {
+				size = 0
+			}
+
+			storage[j].Quantity = rtypes.NewResourceValue(size)
+		}
+	}
+
+	return growth
+}
+
 func (is *inventoryService) run(ctx context.Context, reservationsArg []*reservation) {
 	defer is.lc.ShutdownCompleted()
 	defer is.sub.Close()
@@ -638,9 +857,13 @@ func (is *inventoryService) run(ctx context.Context, reservationsArg []*reservat
 
 	invch := is.clients.inventory.ResultChan()
 	var reservech <-chan inventoryRequest
+	// resizes wait for an inventory the same way reservations do: a resize
+	// check before the first snapshot could only fail
+	var resizech <-chan resizeRequest
 
 	resumeProcessingReservations := func() {
 		reservech = is.reservech
+		resizech = is.resizech
 	}
 
 	t := timer.NewStoppedTimer()
@@ -648,12 +871,13 @@ func (is *inventoryService) run(ctx context.Context, reservationsArg []*reservat
 	updateIPs := func() {
 		if is.clients.ip != nil {
 			reservech = nil
+			resizech = nil
 			if runch == nil {
 				t.Stop()
 				runch = is.runCheck(rctx, state)
 			}
 		} else if reservech == nil && state.inventory != nil {
-			reservech = is.reservech
+			resumeProcessingReservations()
 		}
 	}
 
@@ -719,6 +943,12 @@ loop:
 			updateIPs()
 		case req := <-reservech:
 			is.handleRequest(req, state)
+		case req := <-resizech:
+			if req.dryRun {
+				is.handleResizeCheck(req, state)
+			} else {
+				is.handleResize(req, state)
+			}
 		case req := <-is.lookupch:
 			// lookup registration
 			for _, res := range state.reservations {
@@ -734,7 +964,7 @@ loop:
 			}
 
 			inventoryRequestsCounter.WithLabelValues("lookup", "not-found").Inc()
-			req.ch <- inventoryResponse{err: errReservationNotFound}
+			req.ch <- inventoryResponse{err: ErrReservationNotFound}
 		case req := <-is.unreservech:
 			is.log.Debug("unreserving capacity", "oid", req.order)
 			// remove reservation
@@ -774,7 +1004,7 @@ loop:
 			}
 
 			inventoryRequestsCounter.WithLabelValues("unreserve", "not-found").Inc()
-			req.ch <- inventoryResponse{err: errReservationNotFound}
+			req.ch <- inventoryResponse{err: ErrReservationNotFound}
 		case responseCh := <-is.statusch:
 			select {
 			case responseCh <- is.getStatus(state):

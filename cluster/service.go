@@ -74,10 +74,17 @@ type checkDeploymentExistsRequest struct {
 	responseCh chan<- mtypes.LeaseID
 }
 
-// Cluster is the interface that wraps Reserve and Unreserve methods
+// Cluster is the interface that wraps the reservation methods
 type Cluster interface {
 	Reserve(mtypes.OrderID, dtypes.ResourceGroup) (ctypes.Reservation, error)
 	Unreserve(mtypes.OrderID) error
+	// CheckResize reports whether the reservation held for an order fits a
+	// lease resize to resources, and returns the resources it would be
+	// allocated. The reservation itself is not changed.
+	CheckResize(mtypes.OrderID, dtypes.ResourceGroup) (dtypes.ResourceUnits, error)
+	// Resize swaps the reservation held for an order to resources once the
+	// chain has applied a lease resize.
+	Resize(mtypes.OrderID, dtypes.ResourceGroup) error
 }
 
 // StatusClient is the interface which includes status of service
@@ -236,6 +243,14 @@ func (s *service) Reserve(order mtypes.OrderID, resources dtypes.ResourceGroup) 
 
 func (s *service) Unreserve(order mtypes.OrderID) error {
 	return s.inventory.unreserve(order)
+}
+
+func (s *service) CheckResize(order mtypes.OrderID, resources dtypes.ResourceGroup) (dtypes.ResourceUnits, error) {
+	return s.inventory.checkResize(order, resources)
+}
+
+func (s *service) Resize(order mtypes.OrderID, resources dtypes.ResourceGroup) error {
+	return s.inventory.resize(order, resources)
 }
 
 func (s *service) HostnameService() ctypes.HostnameServiceClient {
@@ -493,7 +508,7 @@ func (s *service) teardownLease(lid mtypes.LeaseID) {
 			// the provider holds the bytes through retention/adoption and
 			// releases the capacity only on volume GC.
 			s.log.Info("durable volume reservation retained through lease close", "lid", lid)
-		case err != nil && !errors.Is(errReservationNotFound, err):
+		case err != nil && !errors.Is(ErrReservationNotFound, err):
 			s.log.Error("unreserve failed", "lid", lid, "err", err)
 		}
 	}
