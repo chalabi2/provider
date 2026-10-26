@@ -70,12 +70,21 @@ func withVolumeSize(units dvbeta.ResourceUnits, size uint64) dvbeta.ResourceUnit
 }
 
 func resizeRequestForTest(lid mtypes.LeaseID, resources dvbeta.ResourceUnits, expiresAt time.Time) mvbeta.LeaseResize {
-	return mvbeta.LeaseResize{
+	req := mvbeta.LeaseResize{
 		LeaseID:   lid,
 		Resources: resources,
 		MaxPrice:  dvbeta.GroupSpec{Resources: resources}.Price(),
 		ExpiresAt: expiresAt.Unix(),
 	}
+
+	digest, err := req.ComputeDigest()
+	if err != nil {
+		panic(err)
+	}
+
+	req.Digest = digest
+
+	return req
 }
 
 // recordingPricing prices every group at a fixed amount and keeps the last
@@ -131,6 +140,7 @@ func makeResizeForTest(t *testing.T, group dvbeta.Group, resources dvbeta.Resour
 
 	s.r = &leaseResize{
 		lid:       s.lid,
+		digest:    s.req.Digest,
 		expiresAt: s.req.ExpiresAt,
 		cfg:       cfg,
 		session:   session.New(testutil.Logger(t), client, &ptypes.Provider{Owner: provider.String()}, 0),
@@ -143,11 +153,12 @@ func makeResizeForTest(t *testing.T, group dvbeta.Group, resources dvbeta.Resour
 	return s
 }
 
-func requireReject(t *testing.T, msg sdk.Msg, lid mtypes.LeaseID, reason mtypes.LeaseResizeCancelReason) {
+func requireReject(t *testing.T, msg sdk.Msg, s *resizeTestScaffold, reason mtypes.LeaseResizeCancelReason) {
 	t.Helper()
 
 	reject := requireMsgType[*mvbeta.MsgRejectLeaseResize](t, []sdk.Msg{msg})
-	require.Equal(t, lid, reject.ID)
+	require.Equal(t, s.lid, reject.ID)
+	require.Equal(t, s.req.Digest, reject.Digest, "the reject names the request it answers")
 	require.Equal(t, reason, reject.Reason)
 }
 
@@ -170,6 +181,7 @@ func Test_LeaseResizeAcceptsWithinMaxPrice(t *testing.T) {
 	accept := requireMsgType[*mvbeta.MsgAcceptLeaseResize](t, []sdk.Msg{msg})
 	require.Equal(t, s.lid, accept.ID)
 	require.Equal(t, sdk.NewInt64DecCoin(sdkutil.DenomUact, 37), accept.Price)
+	require.Equal(t, s.req.Digest, accept.Digest, "the accept names the request it answers")
 
 	// the capacity check and the price see the resized group, priced on the
 	// resources the reservation would be allocated, as a bid is
@@ -190,7 +202,7 @@ func Test_LeaseResizeRejectsPriceAboveMax(t *testing.T) {
 
 	msg, err := s.r.evaluate(context.Background())
 	require.NoError(t, err)
-	requireReject(t, msg, s.lid, mtypes.LeaseResizeRejectPrice)
+	requireReject(t, msg, s, mtypes.LeaseResizeRejectPrice)
 }
 
 func Test_LeaseResizeRejectsWithoutCapacity(t *testing.T) {
@@ -204,7 +216,7 @@ func Test_LeaseResizeRejectsWithoutCapacity(t *testing.T) {
 
 	msg, err := s.r.evaluate(context.Background())
 	require.NoError(t, err)
-	requireReject(t, msg, s.lid, mtypes.LeaseResizeRejectCapacity)
+	requireReject(t, msg, s, mtypes.LeaseResizeRejectCapacity)
 }
 
 func Test_LeaseResizeRejectsUnsupportedChange(t *testing.T) {
@@ -221,7 +233,7 @@ func Test_LeaseResizeRejectsUnsupportedChange(t *testing.T) {
 
 	msg, err := s.r.evaluate(context.Background())
 	require.NoError(t, err)
-	requireReject(t, msg, s.lid, mtypes.LeaseResizeRejectUnsupported)
+	requireReject(t, msg, s, mtypes.LeaseResizeRejectUnsupported)
 
 	s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
 }
@@ -237,7 +249,7 @@ func Test_LeaseResizeRejectsWithoutReservation(t *testing.T) {
 
 	msg, err := s.r.evaluate(context.Background())
 	require.NoError(t, err)
-	requireReject(t, msg, s.lid, mtypes.LeaseResizeRejectOther)
+	requireReject(t, msg, s, mtypes.LeaseResizeRejectOther)
 }
 
 func Test_LeaseResizeVolumeGrowChecksGrowthHeadroom(t *testing.T) {
@@ -275,7 +287,7 @@ func Test_LeaseResizeVolumeGrowChecksGrowthHeadroom(t *testing.T) {
 	t.Run("growth does not fit", func(t *testing.T) {
 		s, msg := evaluate(t, 10*unit.Gi)
 
-		requireReject(t, msg, s.lid, mtypes.LeaseResizeRejectCapacity)
+		requireReject(t, msg, s, mtypes.LeaseResizeRejectCapacity)
 		s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
 	})
 }
@@ -304,7 +316,7 @@ func Test_LeaseResizeIgnoresResolvedRequest(t *testing.T) {
 	})
 
 	// a request this evaluation was not started for replaced it
-	s.r.expiresAt = s.req.ExpiresAt - 60
+	s.r.digest = make([]byte, mvbeta.LeaseResizeDigestSize)
 
 	msg, err := s.r.evaluate(context.Background())
 	require.NoError(t, err)
@@ -413,6 +425,7 @@ func (s *resizeServiceScaffold) requested(t *testing.T, req mvbeta.LeaseResize) 
 		ID:        req.LeaseID,
 		MaxPrice:  req.MaxPrice,
 		ExpiresAt: req.ExpiresAt,
+		Digest:    req.Digest,
 	}))
 }
 
@@ -486,6 +499,7 @@ func Test_LeaseResizeCanceledWhileEvaluating(t *testing.T) {
 	require.NoError(t, s.bus.Publish(&mtypes.EventLeaseResizeCanceled{
 		ID:     lidA,
 		Reason: mtypes.LeaseResizeCancelReasonOwner,
+		Digest: reqA.Digest,
 	}))
 
 	// answered after the cancel was handled
@@ -565,4 +579,30 @@ func Test_LeaseResizedHandsVolumeToProvisioner(t *testing.T) {
 			t.Fatal("timed out waiting for VolumeLeaseResized")
 		}
 	}
+}
+
+func Test_LeaseResizeReplacedInSameBlockAnsweredAnew(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	lid := s.lease(1)
+	expiresAt := time.Now().Add(10 * time.Minute)
+
+	first := s.request(lid, expiresAt)
+
+	// replaced in the same block: the same expiry, other resources
+	resources := first.Resources.Dup()
+	resources[0].CPU.Units = rtypes.NewResourceValue(resources[0].CPU.Units.Value() * 2)
+	second := resizeRequestForTest(lid, resources, expiresAt)
+	require.NotEqual(t, first.Digest, second.Digest)
+
+	s.cluster.On("CheckResize", mock.Anything, mock.Anything).Return(dvbeta.ResourceUnits{}, nil)
+
+	// by the time either evaluation asks, the chain holds the second request
+	s.start(t, nil, []mvbeta.LeaseResize{second})
+
+	s.requested(t, first)
+	s.requested(t, second)
+
+	accept := requireMsgType[*mvbeta.MsgAcceptLeaseResize](t, testutil.ChannelWaitForValue(t, s.broadcasts))
+	require.Equal(t, lid, accept.ID)
+	require.Equal(t, second.Digest, accept.Digest, "the answer names the request it was decided on")
 }

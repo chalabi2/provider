@@ -432,21 +432,21 @@ loop:
 				}
 
 				s.session.Log().Info("lease resize requested", "lid", ev.ID, "max_price", ev.MaxPrice.String())
-				s.startResize(rctx, ev.ID, ev.ExpiresAt, nil)
+				s.startResize(rctx, ev.ID, ev.Digest, ev.ExpiresAt, nil)
 			case *mtypes.EventLeaseResizeCanceled:
 				if ev.ID.Provider != s.session.Provider().Address().String() {
 					break
 				}
 
 				s.session.Log().Info("lease resize canceled", "lid", ev.ID, "reason", ev.Reason.String())
-				s.dropResize(ev.ID)
+				s.dropResize(ev.ID, ev.Digest)
 			case *mtypes.EventLeaseResized:
 				if ev.ID.Provider != s.session.Provider().Address().String() {
 					break
 				}
 
 				s.session.Log().Info("lease resized", "lid", ev.ID, "price", ev.Price.String())
-				s.dropResize(ev.ID)
+				s.dropResize(ev.ID, ev.Digest)
 
 				applyQueue = append(applyQueue, ev.ID)
 				startApply()

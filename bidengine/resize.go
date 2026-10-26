@@ -49,8 +49,11 @@ var errResizesNextKeyRepeated = errors.New("lease resizes pagination: next key r
 // reservation is only swapped once the chain applies an accepted resize.
 type leaseResize struct {
 	lid mtypes.LeaseID
-	// expiresAt identifies the request together with lid: a request that
-	// replaces another one for the same lease has a later expiry.
+	// digest identifies the request. The chain stamps it on every request
+	// and the answer names it, so an answer never lands on a request that
+	// replaced this one, even one made in the same block.
+	digest []byte
+	// expiresAt is when the chain stops accepting the request.
 	expiresAt int64
 	// pending is the request when it is already known, as on the startup
 	// catch-up; otherwise evaluate looks it up.
@@ -67,11 +70,12 @@ type leaseResize struct {
 	cancel context.CancelFunc
 }
 
-func newLeaseResize(svc *service, lid mtypes.LeaseID, expiresAt int64, pending *mvbeta.LeaseResize) *leaseResize {
+func newLeaseResize(svc *service, lid mtypes.LeaseID, digest []byte, expiresAt int64, pending *mvbeta.LeaseResize) *leaseResize {
 	session := svc.session.ForModule("bidengine-resize")
 
 	return &leaseResize{
 		lid:       lid,
+		digest:    digest,
 		expiresAt: expiresAt,
 		pending:   pending,
 		cfg:       svc.cfg,
@@ -147,7 +151,7 @@ func (r *leaseResize) evaluate(ctx context.Context) (sdk.Msg, error) {
 	case req == nil:
 		r.log.Info("lease resize no longer pending")
 		return nil, nil
-	case req.ExpiresAt != r.expiresAt:
+	case !bytes.Equal(req.Digest, r.digest):
 		// the request that replaced it is evaluated on its own
 		r.log.Debug("lease resize replaced", "expires_at", req.ExpiresAt)
 		return nil, nil
@@ -209,7 +213,7 @@ func (r *leaseResize) evaluate(ctx context.Context) (sdk.Msg, error) {
 		return r.reject(mtypes.LeaseResizeRejectPrice), nil
 	}
 
-	return mvbeta.NewMsgAcceptLeaseResize(r.lid, price), nil
+	return mvbeta.NewMsgAcceptLeaseResize(r.lid, price, r.digest), nil
 }
 
 // checkGates runs the bid gates on the resized group and returns the reject
@@ -259,7 +263,7 @@ func (r *leaseResize) checkGates(ctx context.Context, group, resized *dtypes.Gro
 }
 
 func (r *leaseResize) reject(reason mtypes.LeaseResizeCancelReason) sdk.Msg {
-	return mvbeta.NewMsgRejectLeaseResize(r.lid, reason)
+	return mvbeta.NewMsgRejectLeaseResize(r.lid, reason, r.digest)
 }
 
 // pendingRequest returns the chain's pending resize of the lease, or nil
@@ -372,7 +376,7 @@ func (s *service) processResizesPage(ctx context.Context, page []mvbeta.LeaseRes
 		}
 
 		s.session.Log().Info("catching up lease resize", "lid", req.LeaseID)
-		s.startResize(ctx, req.LeaseID, req.ExpiresAt, &req)
+		s.startResize(ctx, req.LeaseID, req.Digest, req.ExpiresAt, &req)
 	}
 }
 
@@ -380,9 +384,9 @@ func (s *service) processResizesPage(ctx context.Context, page []mvbeta.LeaseRes
 // seen it already, so a request found by both the catch-up and its event is
 // answered once. A request that replaces an earlier one for the same lease
 // supersedes it.
-func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, expiresAt int64, pending *mvbeta.LeaseResize) {
+func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, digest []byte, expiresAt int64, pending *mvbeta.LeaseResize) {
 	if r := s.resizes[lid]; r != nil {
-		if r.expiresAt == expiresAt {
+		if bytes.Equal(r.digest, digest) {
 			s.session.Log().Debug("lease resize already seen", "lid", lid)
 			return
 		}
@@ -392,7 +396,7 @@ func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, expiresAt
 
 	s.pruneResizes()
 
-	r := newLeaseResize(s, lid, expiresAt, pending)
+	r := newLeaseResize(s, lid, digest, expiresAt, pending)
 
 	rctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
@@ -409,9 +413,10 @@ func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, expiresAt
 }
 
 // dropResize forgets the lease's resize request once the chain has resolved
-// it, and stops an evaluation still running so it does not answer it.
-func (s *service) dropResize(lid mtypes.LeaseID) {
-	if r := s.resizes[lid]; r != nil {
+// it, and stops an evaluation still running so it does not answer it. An
+// event about another request of the lease leaves the tracked one alone.
+func (s *service) dropResize(lid mtypes.LeaseID, digest []byte) {
+	if r := s.resizes[lid]; r != nil && bytes.Equal(r.digest, digest) {
 		r.cancel()
 		delete(s.resizes, lid)
 	}
