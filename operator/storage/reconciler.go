@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	"cosmossdk.io/log"
@@ -149,10 +151,14 @@ func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 	}
 
 	if vol.Status.AttachedLease != "" {
-		return r.ensureAttached(ctx, vol)
+		if err := r.ensureAttached(ctx, vol); err != nil {
+			return err
+		}
+	} else if err := r.ensureParked(ctx, vol); err != nil {
+		return err
 	}
 
-	return r.ensureParked(ctx, vol)
+	return r.ensureSize(ctx, vol)
 }
 
 // gcDue reports whether the volume passed its retention deadline. Exporting
@@ -400,6 +406,68 @@ func (r *reconciler) ensureParked(ctx context.Context, vol *crd.Volume) error {
 		vol.Status.Phase = phase
 		return r.updateStatus(ctx, vol)
 	}
+
+	return nil
+}
+
+// ensureSize grows the claim that holds the PV, the holder PVC while parked
+// or the attach PVC in the lease namespace while attached, to the volume's
+// recorded size, which a lease resize raises. The -retain class's CSI driver
+// then expands the PV (online for RBD). The record never shrinks
+// (DeployVolume refuses to), so a claim at or above it is left alone, and an
+// unbound claim cannot be resized yet: a later pass grows it.
+func (r *reconciler) ensureSize(ctx context.Context, vol *crd.Volume) error {
+	size, err := strconv.ParseUint(vol.Spec.Size, 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: invalid volume size %q: %s", ErrVolumeOperator, vol.Spec.Size, err.Error())
+	}
+
+	pv, err := r.kc.CoreV1().PersistentVolumes().Get(ctx, vol.Status.PVName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	ref := pv.Spec.ClaimRef
+	if ref == nil || ref.Name != vol.Name {
+		return nil
+	}
+
+	pvc, err := r.kc.CoreV1().PersistentVolumeClaims(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			// mid choreography; a later pass sees the claim that replaces it
+			return nil
+		}
+
+		return err
+	}
+
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return nil
+	}
+
+	want := resource.NewQuantity(int64(size), resource.DecimalSI) // nolint: gosec
+	if cur, set := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; set && cur.Cmp(*want) >= 0 {
+		return nil
+	}
+
+	patch, err := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"resources": map[string]any{
+				"requests": corev1.ResourceList{corev1.ResourceStorage: *want},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = r.kc.CoreV1().PersistentVolumeClaims(ref.Namespace).Patch(ctx, ref.Name, k8stypes.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return err
+	}
+
+	r.log.Info("volume grow requested", "volume", vol.Name, "ns", ref.Namespace, "size", vol.Spec.Size)
 
 	return nil
 }

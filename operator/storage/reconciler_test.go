@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kfake "k8s.io/client-go/kubernetes/fake"
@@ -330,6 +331,96 @@ func TestReconcileDetachReparks(t *testing.T) {
 	require.True(t, kerrors.IsNotFound(err))
 
 	require.Equal(t, crd.VolumePhaseProvisioned, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+// testVolumeSize is testVolume's recorded size.
+const testVolumeSize = int64(214748364800)
+
+// boundClaim is the claim in ns holding the PV, bound and requesting size.
+func boundClaim(vol *crd.Volume, ns string, size int64) *corev1.PersistentVolumeClaim {
+	pvc := holderPVC(vol, testPV)
+	pvc.Namespace = ns
+	pvc.Spec.Resources.Requests = corev1.ResourceList{
+		corev1.ResourceStorage: *resource.NewQuantity(size, resource.DecimalSI),
+	}
+	pvc.Status.Phase = corev1.ClaimBound
+
+	return pvc
+}
+
+func claimRequest(t *testing.T, s *scaffold, ns, name string) int64 {
+	t.Helper()
+
+	pvc, err := s.kc.CoreV1().PersistentVolumeClaims(ns).Get(context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	return pvc.Spec.Resources.Requests.Storage().Value()
+}
+
+func TestReconcileGrowsParkedClaim(t *testing.T) {
+	lid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	pv := testPVObj(vol, testVolNS, vol.Name)
+
+	s := makeScaffold(t, nil, []runtime.Object{boundClaim(vol, testVolNS, testVolumeSize/2), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, testVolumeSize, claimRequest(t, s, testVolNS, vol.Name))
+	require.Equal(t, crd.VolumePhaseProvisioned, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+func TestReconcileGrowsAttachedClaim(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	computeLid := testutil.LeaseID(t)
+	targetNS := clusterutil.LeaseIDToNamespace(computeLid)
+
+	vol := testVolume(t, lid, crd.VolumePhaseAttached)
+	vol.Status.PVName = testPV
+	vol.Status.AttachedLease = computeLid.String()
+
+	pv := testPVObj(vol, targetNS, vol.Name)
+
+	s := makeScaffold(t, nil, []runtime.Object{boundClaim(vol, targetNS, testVolumeSize/2), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, testVolumeSize, claimRequest(t, s, targetNS, vol.Name))
+
+	// the claim on the PV was grown in place; nothing was re-parked
+	_, err := s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.True(t, kerrors.IsNotFound(err))
+}
+
+func TestReconcileGrowWaitsForBoundClaim(t *testing.T) {
+	lid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	pvc := boundClaim(vol, testVolNS, testVolumeSize/2)
+	pvc.Status.Phase = corev1.ClaimPending
+
+	s := makeScaffold(t, nil, []runtime.Object{pvc, testPVObj(vol, testVolNS, vol.Name)}, []runtime.Object{vol})
+
+	// the API refuses to resize an unbound claim
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+	require.Equal(t, testVolumeSize/2, claimRequest(t, s, testVolNS, vol.Name))
+}
+
+func TestReconcileGrowNeverShrinksClaim(t *testing.T) {
+	lid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	s := makeScaffold(t, nil, []runtime.Object{boundClaim(vol, testVolNS, 2*testVolumeSize), testPVObj(vol, testVolNS, vol.Name)}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+	require.Equal(t, 2*testVolumeSize, claimRequest(t, s, testVolNS, vol.Name))
 }
 
 func TestReconcileRetainedStaysRetainedWhenParked(t *testing.T) {
