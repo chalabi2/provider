@@ -367,6 +367,13 @@ func (m *manager) emitReceivedEvents() {
 	copyOfData := new(dvbeta.QueryDeploymentResponse)
 	*copyOfData = m.data
 	for _, lease := range m.localLeases {
+		// AEP-87: a volume lease runs no workload, so a manifest that names its
+		// group is never deployed to it; the storage operator serves its volume.
+		if isVolumeLease(lease) {
+			m.log.Debug("manifest received skips volume lease", "lid", lease.LeaseID)
+			continue
+		}
+
 		m.log.Debug("publishing manifest received for lease", "lid", lease.LeaseID)
 		if err := m.bus.Publish(event.ManifestReceived{
 			LeaseID:    lease.LeaseID,
@@ -441,6 +448,12 @@ func (m *manager) validateRequest(req manifestRequest) error {
 		return err
 	}
 
+	// AEP-87: a deployment whose every lease here is a volume lease has no
+	// workload to deploy, so a manifest for it can only be a client's mistake.
+	if len(m.localLeases) != 0 && allVolumeLeases(m.localLeases) {
+		return fmt.Errorf("%w: volume leases take no manifest", maniv2beta2.ErrInvalidManifest)
+	}
+
 	// ensure that an uploaded manifest matches the hash declared on
 	// the Akash Deployment.Version
 	version, err := req.value.Manifest.Version()
@@ -512,4 +525,18 @@ func (m *manager) checkHostnamesForManifest(requestManifest maniv2beta2.Manifest
 	}
 
 	return m.hostnameService.CanReserveHostnames(allHostnames, ownerAddr)
+}
+
+func isVolumeLease(lease event.LeaseWon) bool {
+	return lease.Group != nil && lease.Group.GroupSpec.Volume != nil
+}
+
+func allVolumeLeases(leases []event.LeaseWon) bool {
+	for _, lease := range leases {
+		if !isVolumeLease(lease) {
+			return false
+		}
+	}
+
+	return true
 }

@@ -4,11 +4,18 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	maniv2beta2 "pkg.akt.dev/go/manifest/v2beta3"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	mtypes "pkg.akt.dev/go/node/market/v1"
+	"pkg.akt.dev/go/testutil"
+	"pkg.akt.dev/go/util/pubsub"
 
+	"github.com/akash-network/provider/event"
 	"github.com/akash-network/provider/utils/httperror"
 )
 
@@ -468,4 +475,67 @@ func TestValidateRequestWrapsManifestError(t *testing.T) {
 	require.ErrorIs(t, err, maniv2beta2.ErrInvalidManifest)
 	require.Equal(t, http.StatusUnprocessableEntity,
 		httperror.StatusCodeFrom(ManifestSubmitErrorToHTTP(err)))
+}
+
+func TestValidateRequestRefusesManifestForVolumeLeases(t *testing.T) {
+	m := &manager{localLeases: []event.LeaseWon{volumeLeaseWon(1)}}
+
+	err := m.validateRequest(manifestRequest{
+		ctx:   context.Background(),
+		value: &submitRequest{Manifest: maniv2beta2.Manifest{{Name: "global"}}},
+	})
+
+	require.ErrorIs(t, err, maniv2beta2.ErrInvalidManifest)
+	require.Equal(t, http.StatusUnprocessableEntity,
+		httperror.StatusCodeFrom(ManifestSubmitErrorToHTTP(err)))
+}
+
+func TestEmitReceivedEventsSkipsVolumeLeases(t *testing.T) {
+	bus := pubsub.NewBus()
+	defer bus.Close()
+
+	sub, err := bus.Subscribe()
+	require.NoError(t, err)
+	defer sub.Close()
+
+	compute := computeLeaseWon(1)
+	m := &manager{
+		bus:         bus,
+		log:         testutil.Logger(t),
+		fetched:     true,
+		manifests:   []*maniv2beta2.Manifest{{{Name: "web"}}},
+		localLeases: []event.LeaseWon{compute, volumeLeaseWon(2)},
+	}
+
+	m.emitReceivedEvents()
+
+	require.Equal(t, []mtypes.LeaseID{compute.LeaseID}, receivedManifestLeases(sub))
+}
+
+func receivedManifestLeases(sub pubsub.Subscriber) []mtypes.LeaseID {
+	var leases []mtypes.LeaseID
+	for {
+		select {
+		case ev := <-sub.Events():
+			if received, ok := ev.(event.ManifestReceived); ok {
+				leases = append(leases, received.LeaseID)
+			}
+		case <-time.After(200 * time.Millisecond):
+			return leases
+		}
+	}
+}
+
+func computeLeaseWon(gseq uint32) event.LeaseWon {
+	return event.LeaseWon{
+		LeaseID: mtypes.LeaseID{Owner: "akash1owner", DSeq: 7, GSeq: gseq, OSeq: 1, Provider: "akash1provider"},
+		Group:   &dtypes.Group{GroupSpec: dtypes.GroupSpec{Name: "web"}},
+	}
+}
+
+func volumeLeaseWon(gseq uint32) event.LeaseWon {
+	lease := computeLeaseWon(gseq)
+	lease.Group = &dtypes.Group{GroupSpec: dtypes.GroupSpec{Name: "data", Volume: &dv1.VolumePolicy{Vid: "data"}}}
+
+	return lease
 }
