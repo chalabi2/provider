@@ -256,6 +256,12 @@ func (inv *inventory) tryAdjust(
 }
 
 func tryAdjustCPU(rp *inventoryV1.CPU, res *rtypes.CPU) bool {
+	// a unit that requests no CPU, as an AEP-87 volume group's does, is placed
+	// on no CPU, so it has no architecture to match
+	if res.Units.Value() == 0 {
+		return true
+	}
+
 	requestedArch := "amd64"
 
 	if len(res.Attributes) > 0 {
