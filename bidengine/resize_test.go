@@ -292,6 +292,28 @@ func Test_LeaseResizeVolumeGrowChecksGrowthHeadroom(t *testing.T) {
 	})
 }
 
+func Test_LeaseResizeVolumeGrowNeedsAGrowableClass(t *testing.T) {
+	group := *volumeGroupForTest(t, volumeGroupSpec())
+	resources := withVolumeSize(group.GroupSpec.Resources, 25*unit.Gi)
+
+	volumes := defaultVolumeConfig()
+	volumes.GrowableClasses = nil
+
+	s := makeResizeForTest(t, group, resources, Config{
+		PricingStrategy: testBidPricingStrategy(50),
+		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
+		Volumes:         volumes,
+	})
+	s.r.pass = fixedAttrSignatureService{attrs: volumeCapabilities()}
+	s.r.storage = fakeStorageInventory{testVolumeClass: 100 * unit.Gi}
+
+	msg, err := s.r.evaluate(context.Background())
+	require.NoError(t, err)
+
+	requireReject(t, msg, s, mtypes.LeaseResizeRejectUnsupported)
+	s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
+}
+
 func Test_LeaseResizeIgnoresExpiredRequest(t *testing.T) {
 	group := computeGroupForResizeTest(t)
 

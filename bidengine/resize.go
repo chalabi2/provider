@@ -254,6 +254,11 @@ func (r *leaseResize) checkGates(ctx context.Context, group, resized *dtypes.Gro
 		growth = size - held
 	}
 
+	if growth > 0 && !gates.cfg.Volumes.ClassGrowable(class) {
+		r.log.Info("declining lease resize: storage class cannot grow a volume in place", "class", class)
+		return r.reject(mtypes.LeaseResizeRejectUnsupported), nil
+	}
+
 	if !gates.volumeHeadroom(class, growth) {
 		r.log.Info("declining lease resize: insufficient storage class headroom", "growth", growth)
 		return r.reject(mtypes.LeaseResizeRejectCapacity), nil

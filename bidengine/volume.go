@@ -28,11 +28,24 @@ type VolumeConfig struct {
 	// MaxReplicas is the highest replica count the provider supports
 	// exporting. Zero declines any order with replication terms.
 	MaxReplicas uint32
+	// GrowableClasses lists the volume classes whose StorageClass can expand
+	// a bound claim in place. A volume of any other class is held to its size:
+	// accepting its growth would bill the tenant for space the claim never gets.
+	GrowableClasses []string
 }
 
 // ClassEnabled reports whether the class is configured for volume bidding.
 func (c VolumeConfig) ClassEnabled(class string) bool {
-	for _, cl := range c.Classes {
+	return containsClass(c.Classes, class)
+}
+
+// ClassGrowable reports whether volumes of the class can grow in place.
+func (c VolumeConfig) ClassGrowable(class string) bool {
+	return containsClass(c.GrowableClasses, class)
+}
+
+func containsClass(classes []string, class string) bool {
+	for _, cl := range classes {
 		if cl == class {
 			return true
 		}

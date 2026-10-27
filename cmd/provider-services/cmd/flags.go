@@ -221,6 +221,11 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.Flags().StringSlice(FlagVolumeGrowableClasses, nil, "volume classes whose -retain StorageClass allows volume expansion; a lease resize growing a volume of any other class is declined. empty declines every volume growth")
+	if err := viper.BindPFlag(FlagVolumeGrowableClasses, cmd.Flags().Lookup(FlagVolumeGrowableClasses)); err != nil {
+		return err
+	}
+
 	cmd.Flags().String(FlagVolumeReplicationDriver, "stream-export", "volume replication driver: stream-export (default) or rbd-mirror (opt-in, mutually trusting provider pairs only)")
 	if err := viper.BindPFlag(FlagVolumeReplicationDriver, cmd.Flags().Lookup(FlagVolumeReplicationDriver)); err != nil {
 		return err

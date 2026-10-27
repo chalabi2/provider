@@ -131,8 +131,9 @@ func volumeGroupSpec() dvbeta.GroupSpec {
 
 func defaultVolumeConfig() VolumeConfig {
 	return VolumeConfig{
-		Classes:      []string{testVolumeClass},
-		MaxRetention: 7 * 24 * time.Hour,
+		Classes:         []string{testVolumeClass},
+		MaxRetention:    7 * 24 * time.Hour,
+		GrowableClasses: []string{testVolumeClass},
 	}
 }
 

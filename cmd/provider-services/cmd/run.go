@@ -113,6 +113,7 @@ const (
 	FlagVolumeMaxSize                    = "volume-max-size"
 	FlagVolumeMaxRetention               = "volume-max-retention"
 	FlagVolumeMaxReplicas                = "volume-max-replicas"
+	FlagVolumeGrowableClasses            = "volume-growable-classes"
 	FlagVolumeReplicationDriver          = "volume-replication-driver"
 	FlagVolumeReplicationRookNS          = "volume-replication-rook-namespace"
 	FlagVolumeReplicationDir             = "volume-replication-dir"
@@ -711,6 +712,8 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		MaxSize:      viper.GetUint64(FlagVolumeMaxSize),
 		MaxRetention: viper.GetDuration(FlagVolumeMaxRetention),
 		MaxReplicas:  viper.GetUint32(FlagVolumeMaxReplicas),
+
+		GrowableClasses: viper.GetStringSlice(FlagVolumeGrowableClasses),
 	}
 	config.MonitorMaxRetries = monitorMaxRetries
 	config.MonitorRetryPeriod = monitorRetryPeriod
