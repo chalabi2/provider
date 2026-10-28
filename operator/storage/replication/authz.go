@@ -36,7 +36,8 @@ type VolumeLease struct {
 	OSeq uint32
 	// State of the lease.
 	State mv1.Lease_State
-	// Reason the lease closed, once it has.
+	// Reason the lease closed, once it has; while it is in its reclamation
+	// window, the reason it is being reclaimed.
 	Reason mv1.LeaseClosedReason
 	// Policy is the group's VolumePolicy.
 	Policy dv1.VolumePolicy
@@ -269,12 +270,17 @@ func (c *queryChainState) VolumeLeases(ctx context.Context, owner, vid string) (
 				continue
 			}
 
+			reason := entry.Lease.Reason
+			if entry.Lease.State == mv1.LeaseReclaiming && entry.Lease.Reclamation != nil {
+				reason = entry.Lease.Reclamation.Reason
+			}
+
 			out = append(out, VolumeLease{
 				Provider: lid.Provider,
 				DSeq:     lid.DSeq,
 				OSeq:     lid.OSeq,
 				State:    entry.Lease.State,
-				Reason:   entry.Lease.Reason,
+				Reason:   reason,
 				Policy:   *policy,
 			})
 		}

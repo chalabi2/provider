@@ -344,24 +344,67 @@ func (op *storageOperator) resyncChain(ctx context.Context) error {
 		}
 
 		if lid, err := vol.Spec.LeaseID.FromCRD(); err == nil && !active[lid.String()] && volumeLeaseIsCurrent(vol, lid) {
-			switch vol.Status.Phase {
-			case crd.VolumePhaseRetained, crd.VolumePhaseReleasing, crd.VolumePhaseAdopting:
+			switch {
+			case vol.Status.Phase == crd.VolumePhaseRetained,
+				vol.Status.Phase == crd.VolumePhaseReleasing,
+				vol.Status.Phase == crd.VolumePhaseAdopting:
 				// already accounted for or frozen
-			case crd.VolumePhaseExporting:
-				// lease closed while the operator was down: start the
-				// retention clock but keep the export freeze
-				if err := op.stampExportingRetention(ctx, vol); err != nil {
-					op.log.Error("stamping exporting retention", "volume", vol.Name, "err", err)
-				}
+			case vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil:
+				// its close is recorded
 			default:
-				if err := op.retainVolume(ctx, vol); err != nil {
-					op.log.Error("retaining volume", "volume", vol.Name, "err", err)
+				if err := op.settleInactiveLease(ctx, vol, lid); err != nil {
+					op.log.Error("settling volume lease", "volume", vol.Name, "err", err)
 				}
 			}
 		}
 	}
 
 	return nil
+}
+
+// settleInactiveLease records what became of a volume whose own lease is
+// no longer active, as the chain has it, when the operator missed the
+// events that said so. A lease in its reclamation window is not closed: a
+// volume moving away exports through it, and any other reclamation is
+// settled by its close. A closed lease starts the retention clock, frozen
+// in Exporting for a volume that moves, and the volume is retained
+// otherwise.
+func (op *storageOperator) settleInactiveLease(ctx context.Context, vol *crd.Volume, lid mv1.LeaseID) error {
+	leases, err := op.chain.VolumeLeases(ctx, vol.Spec.Owner, vol.Spec.VID)
+	if err != nil {
+		return err
+	}
+
+	var (
+		state mv1.Lease_State
+		moves bool
+	)
+
+	for _, lease := range leases {
+		if lease.Provider == lid.Provider && lease.DSeq == lid.DSeq && lease.OSeq == lid.OSeq && lease.Policy.Vid == vol.Spec.VID {
+			state, moves = lease.State, closedForMove(lease.Reason)
+			break
+		}
+	}
+
+	switch {
+	case state == mv1.LeaseReclaiming:
+		if moves && vol.Status.Phase != crd.VolumePhaseExporting {
+			return op.exportVolume(ctx, vol)
+		}
+
+		return nil
+	case moves, vol.Status.Phase == crd.VolumePhaseExporting:
+		return op.stampExportingRetention(ctx, vol)
+	default:
+		return op.retainVolume(ctx, vol)
+	}
+}
+
+// closedForMove reports whether a volume lease ends so that the volume moves:
+// its order re-lists and the next provider copies it from this one.
+func closedForMove(reason mv1.LeaseClosedReason) bool {
+	return reason == mv1.LeaseClosedReasonVolumeMigrate || reason == mv1.LeaseClosedReasonVolumeEvict
 }
 
 // volumeLeaseIsCurrent reports whether the volume's recorded lease still
@@ -389,7 +432,7 @@ func (op *storageOperator) applyChainEvent(ctx context.Context, ev interface{}) 
 func (op *storageOperator) applyChainEventOnce(ctx context.Context, ev interface{}) error {
 	switch ev := ev.(type) {
 	case *mv1.EventLeaseClosed:
-		return op.applyLeaseClosed(ctx, ev.ID)
+		return op.applyLeaseClosed(ctx, ev.ID, ev.Reason)
 	case *mv1.EventLeaseReclaimStarted:
 		return op.applyReclaimStarted(ctx, ev)
 	case *mv1.EventLeaseResized:
@@ -408,7 +451,7 @@ func (op *storageOperator) applyChainEventOnce(ctx context.Context, ev interface
 // applyLeaseClosed handles both directions of a lease close: the volume's
 // own lease (start the retention clock) and an attached compute lease
 // (clear the attachment record; the reconciler re-parks the PV).
-func (op *storageOperator) applyLeaseClosed(ctx context.Context, lid mv1.LeaseID) error {
+func (op *storageOperator) applyLeaseClosed(ctx context.Context, lid mv1.LeaseID, reason mv1.LeaseClosedReason) error {
 	list, err := op.ac.AkashV2beta2().Volumes(op.ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
@@ -438,6 +481,15 @@ func (op *storageOperator) applyLeaseClosed(ctx context.Context, lid mv1.LeaseID
 					return err
 				}
 			default:
+				// a move whose reclamation went unseen exports all the same
+				if closedForMove(reason) {
+					if err := op.stampExportingRetention(ctx, vol); err != nil {
+						return err
+					}
+
+					continue
+				}
+
 				if err := op.retainVolume(ctx, vol); err != nil {
 					return err
 				}
@@ -472,18 +524,26 @@ func (op *storageOperator) applyReclaimStarted(ctx context.Context, ev *mv1.Even
 			return nil
 		}
 
-		uvol := vol.DeepCopy()
-		uvol.Status.Phase = crd.VolumePhaseExporting
-
 		op.log.Info("volume reclaim started; export window open", "volume", vol.Name,
 			"reason", ev.Reason.String(), "deadline", ev.Deadline)
 
-		if _, err := op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{}); err != nil {
-			return err
-		}
-
-		return nil
+		return op.exportVolume(ctx, vol)
 	}
+
+	return nil
+}
+
+// exportVolume freezes a volume into Exporting for its reclamation window.
+func (op *storageOperator) exportVolume(ctx context.Context, vol *crd.Volume) error {
+	uvol := vol.DeepCopy()
+	uvol.Status.Phase = crd.VolumePhaseExporting
+
+	updated, err := op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+
+	*vol = *updated
 
 	return nil
 }
@@ -532,12 +592,12 @@ func (op *storageOperator) applyLeaseResized(ctx context.Context, lid mv1.LeaseI
 	return nil
 }
 
-// stampExportingRetention starts the retention clock on an Exporting
-// volume whose own lease closed, without leaving the Exporting freeze:
-// the destination may still be pulling the final diff. The reconciler
-// thaws the phase to Retained once the deadline passes.
+// stampExportingRetention starts the retention clock on a volume whose own
+// lease closed for a move, freezing it in Exporting: the destination may
+// still be pulling the final diff. The reconciler thaws the phase to
+// Retained once the deadline passes.
 func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd.Volume) error {
-	if vol.Status.RetainedUntil != nil {
+	if vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil {
 		return nil
 	}
 
@@ -547,6 +607,7 @@ func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd
 	}
 
 	uvol := vol.DeepCopy()
+	uvol.Status.Phase = crd.VolumePhaseExporting
 	uvol.Status.AttachedLease = ""
 
 	retainedUntil := metav1.NewTime(time.Now().Add(retention))

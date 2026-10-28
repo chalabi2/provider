@@ -25,6 +25,7 @@ import (
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/testutil"
 
+	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	afake "github.com/akash-network/provider/pkg/client/clientset/versioned/fake"
 )
@@ -87,7 +88,7 @@ func TestApplyLeaseClosedRetainsVolume(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, crd.VolumePhaseRetained, uvol.Status.Phase)
@@ -107,7 +108,7 @@ func TestApplyLeaseClosedReclaimDeleteReleases(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, crd.VolumePhaseReleasing, uvol.Status.Phase)
@@ -125,7 +126,7 @@ func TestApplyLeaseClosedDetachesComputeLease(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), computeLid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), computeLid, mv1.LeaseClosedReasonOwner))
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, "", uvol.Status.AttachedLease)
@@ -140,7 +141,7 @@ func TestApplyLeaseClosedIgnoresFrozenPhases(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, crd.VolumePhaseAdopting, uvol.Status.Phase)
@@ -154,7 +155,7 @@ func TestApplyLeaseClosedExportingStampsRetention(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
 
 	// the retention clock starts (source holds through window + retention)
 	// but the phase stays Exporting: GC remains frozen while the
@@ -330,7 +331,7 @@ func TestApplyLeaseClosedIgnoresAdoptedVolume(t *testing.T) {
 
 	s := makeOpScaffold(t, nil, []runtime.Object{vol})
 
-	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid))
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
 
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
@@ -500,6 +501,95 @@ func TestResyncChainLeavesActiveLeases(t *testing.T) {
 	uvol := getOpVolume(t, s, vol.Name)
 	require.Equal(t, computeLid.String(), uvol.Status.AttachedLease)
 	require.Equal(t, crd.VolumePhaseAttached, uvol.Status.Phase)
+}
+
+// TestApplyLeaseClosedForAMoveExports: a move whose reclamation the
+// operator never saw still exports, rather than being retained, which would
+// suspend a bucket before the next provider copied it.
+func TestApplyLeaseClosedForAMoveExports(t *testing.T) {
+	for _, reason := range []mv1.LeaseClosedReason{mv1.LeaseClosedReasonVolumeMigrate, mv1.LeaseClosedReasonVolumeEvict} {
+		t.Run(reason.String(), func(t *testing.T) {
+			lid := testutil.LeaseID(t)
+			vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+			vol.Status.PVName = testPV
+
+			s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+			require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, reason))
+
+			uvol := getOpVolume(t, s, vol.Name)
+			require.Equal(t, crd.VolumePhaseExporting, uvol.Status.Phase)
+			require.NotNil(t, uvol.Status.RetainedUntil)
+			require.WithinDuration(t, time.Now().Add(168*time.Hour), uvol.Status.RetainedUntil.Time, time.Minute)
+		})
+	}
+}
+
+// TestResyncChainSettlesALeaseAsTheChainHasIt: a volume whose own lease is
+// no longer active, with the events that said why missed, is recorded from
+// what the chain holds of that lease.
+func TestResyncChainSettlesALeaseAsTheChainHasIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		was      crd.VolumePhase
+		state    mv1.Lease_State
+		reason   mv1.LeaseClosedReason
+		phase    crd.VolumePhase
+		retained bool
+	}{
+		"moving, in its window":        {crd.VolumePhaseProvisioned, mv1.LeaseReclaiming, mv1.LeaseClosedReasonVolumeMigrate, crd.VolumePhaseExporting, false},
+		"evicted, in its window":       {crd.VolumePhaseProvisioned, mv1.LeaseReclaiming, mv1.LeaseClosedReasonVolumeEvict, crd.VolumePhaseExporting, false},
+		"exporting, in its window":     {crd.VolumePhaseExporting, mv1.LeaseReclaiming, mv1.LeaseClosedReasonVolumeMigrate, crd.VolumePhaseExporting, false},
+		"exporting, closed":            {crd.VolumePhaseExporting, mv1.LeaseClosed, mv1.LeaseClosedReasonVolumeMigrate, crd.VolumePhaseExporting, true},
+		"moved":                        {crd.VolumePhaseProvisioned, mv1.LeaseClosed, mv1.LeaseClosedReasonVolumeMigrate, crd.VolumePhaseExporting, true},
+		"closed by its owner":          {crd.VolumePhaseProvisioned, mv1.LeaseClosed, mv1.LeaseClosedReasonOwner, crd.VolumePhaseRetained, true},
+		"out of funds":                 {crd.VolumePhaseProvisioned, mv1.LeaseInsufficientFunds, mv1.LeaseClosedReasonInsufficientFunds, crd.VolumePhaseRetained, true},
+		"in another reclamation":       {crd.VolumePhaseProvisioned, mv1.LeaseReclaiming, mv1.LeaseClosedReasonUnstable, crd.VolumePhaseProvisioned, false},
+		"exporting, gone from chain":   {crd.VolumePhaseExporting, mv1.LeaseStateInvalid, mv1.LeaseClosedReasonInvalid, crd.VolumePhaseExporting, true},
+		"provisioned, gone from chain": {crd.VolumePhaseProvisioned, mv1.LeaseStateInvalid, mv1.LeaseClosedReasonInvalid, crd.VolumePhaseRetained, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lid := testutil.LeaseID(t)
+			vol := testVolume(t, lid, tc.was)
+			vol.Status.PVName = testPV
+
+			chain := &fakeChainClient{active: map[string]bool{}}
+			if tc.state != mv1.LeaseStateInvalid {
+				chain.leases = []replication.VolumeLease{{
+					Provider: lid.Provider,
+					DSeq:     lid.DSeq,
+					OSeq:     lid.OSeq,
+					State:    tc.state,
+					Reason:   tc.reason,
+					Policy:   dv1.VolumePolicy{Vid: testVID},
+				}}
+			}
+
+			s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+			require.NoError(t, s.op.resyncChain(context.Background()))
+
+			uvol := getOpVolume(t, s, vol.Name)
+			require.Equal(t, tc.phase, uvol.Status.Phase)
+			require.Equal(t, tc.retained, uvol.Status.RetainedUntil != nil)
+		})
+	}
+}
+
+func TestResyncChainWaitsForTheChainToSettleALease(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{active: map[string]bool{}}
+	chain.leasesErr = fmt.Errorf("node down")
+
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
+	require.Nil(t, uvol.Status.RetainedUntil)
 }
 
 func TestStorageCmdRegistered(t *testing.T) {
