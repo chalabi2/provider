@@ -16,7 +16,9 @@ import (
 
 const flagBucketKeyAccess = "access"
 
-type bucketCmdContext struct {
+// leaseCmdContext is the lease a command calls its provider about, built
+// from the flags and the caller's own address.
+type leaseCmdContext struct {
 	client sdkclient.Context
 	lid    mtypes.LeaseID
 }
@@ -50,7 +52,7 @@ func bucketInfoCmd() *cobra.Command {
 		Args:         cobra.ExactArgs(0),
 		PreRunE:      ProviderPersistentPreRunE,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withBucketClient(cmd, func(gclient apclient.Client, cctx bucketCmdContext) error {
+			return withLeaseClient(cmd, func(gclient apclient.Client, cctx leaseCmdContext) error {
 				info, err := gclient.BucketInfo(cmd.Context(), cctx.lid)
 				if err != nil {
 					return showErrorToUser(err)
@@ -61,7 +63,7 @@ func bucketInfoCmd() *cobra.Command {
 		},
 	}
 
-	addBucketFlags(cmd)
+	addLeaseClientFlags(cmd)
 
 	return cmd
 }
@@ -79,7 +81,7 @@ func bucketKeyCreateCmd() *cobra.Command {
 				return err
 			}
 
-			return withBucketClient(cmd, func(gclient apclient.Client, cctx bucketCmdContext) error {
+			return withLeaseClient(cmd, func(gclient apclient.Client, cctx leaseCmdContext) error {
 				key, err := gclient.CreateBucketKey(cmd.Context(), cctx.lid, apclient.BucketKeyRequest{
 					Name:   args[0],
 					Access: apclient.BucketKeyAccess(access),
@@ -95,7 +97,7 @@ func bucketKeyCreateCmd() *cobra.Command {
 		},
 	}
 
-	addBucketFlags(cmd)
+	addLeaseClientFlags(cmd)
 	cmd.Flags().String(flagBucketKeyAccess, string(apclient.BucketKeyReadWrite), "what the key may do: readwrite or read")
 
 	return cmd
@@ -109,7 +111,7 @@ func bucketKeyRevokeCmd() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		PreRunE:      ProviderPersistentPreRunE,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withBucketClient(cmd, func(gclient apclient.Client, cctx bucketCmdContext) error {
+			return withLeaseClient(cmd, func(gclient apclient.Client, cctx leaseCmdContext) error {
 				if err := gclient.RevokeBucketKey(cmd.Context(), cctx.lid, args[0]); err != nil {
 					return showErrorToUser(err)
 				}
@@ -121,18 +123,18 @@ func bucketKeyRevokeCmd() *cobra.Command {
 		},
 	}
 
-	addBucketFlags(cmd)
+	addLeaseClientFlags(cmd)
 
 	return cmd
 }
 
-func addBucketFlags(cmd *cobra.Command) {
+func addLeaseClientFlags(cmd *cobra.Command) {
 	AddProviderOperationFlagsToCmd(cmd)
 	addLeaseFlags(cmd)
 	addAuthFlags(cmd)
 }
 
-func withBucketClient(cmd *cobra.Command, fn func(apclient.Client, bucketCmdContext) error) error {
+func withLeaseClient(cmd *cobra.Command, fn func(apclient.Client, leaseCmdContext) error) error {
 	ctx := cmd.Context()
 
 	cl, err := cli.ClientFromContext(ctx)
@@ -160,5 +162,5 @@ func withBucketClient(cmd *cobra.Command, fn func(apclient.Client, bucketCmdCont
 		return err
 	}
 
-	return fn(gclient, bucketCmdContext{client: cctx, lid: bid.LeaseID()})
+	return fn(gclient, leaseCmdContext{client: cctx, lid: bid.LeaseID()})
 }
