@@ -37,10 +37,20 @@ func writeTree(t *testing.T, d *FileDriver, ref Ref, files map[string]string) {
 func readTree(t *testing.T, d *FileDriver, ref Ref) map[string]string {
 	t.Helper()
 
+	tree, err := tryReadTree(d, ref)
+	require.NoError(t, err)
+
+	return tree
+}
+
+// tryReadTree is readTree for a tree an import may be replacing as it reads.
+func tryReadTree(d *FileDriver, ref Ref) (map[string]string, error) {
 	tree := make(map[string]string)
 
 	root, err := os.OpenRoot(d.DataPath(ref))
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
 	defer func() { _ = root.Close() }()
 
@@ -68,9 +78,8 @@ func readTree(t *testing.T, d *FileDriver, ref Ref) map[string]string {
 
 		return nil
 	})
-	require.NoError(t, err)
 
-	return tree
+	return tree, err
 }
 
 // archiveOf builds an archive from headers, each with its content.

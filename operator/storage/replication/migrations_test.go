@@ -193,7 +193,8 @@ func TestMigrationsKeepCopyingUntilTheSourceIsFinal(t *testing.T) {
 	require.NoError(t, w.m.reconcile(w.ctx))
 
 	require.Eventually(t, func() bool {
-		return readTree(t, w.dst, w.dstRef)["app.db"] == "rows the tenant wrote"
+		tree, err := tryReadTree(w.dst, w.dstRef)
+		return err == nil && tree["app.db"] == "rows the tenant wrote"
 	}, 5*time.Second, time.Millisecond)
 	require.Equal(t, crd.VolumePhaseImporting, w.volume(t).Status.Phase)
 
