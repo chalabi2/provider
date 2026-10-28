@@ -113,6 +113,26 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 		uobj.Labels = vol.Labels
 		uobj.Spec = vol.Spec
 
+		if relisted(obj.Spec.LeaseID, vol.Spec.LeaseID) {
+			// won again on the group's re-listed order: what this record
+			// said of the closed lease is void, and the storage operator
+			// decides afresh whether the data here is still the latest. A
+			// copy that never finished arriving keeps its source: there is
+			// no whole copy here to fall back on.
+			uobj.Status.Phase = crd.VolumePhasePending
+			uobj.Status.RetainedUntil = nil
+			uobj.Status.AttachedLease = ""
+			uobj.Status.LocalCopy = false
+
+			if !obj.Status.LocalCopy {
+				uobj.Spec.ImportFrom = obj.Spec.ImportFrom
+			}
+		} else {
+			// the storage operator records where a moved volume's data
+			// comes from
+			uobj.Spec.ImportFrom = obj.Spec.ImportFrom
+		}
+
 		_, err = wrapKubeCall("akash-volumes-update", func() (*crd.Volume, error) {
 			return c.ac.AkashV2beta2().Volumes(c.ns).Update(ctx, uobj, metav1.UpdateOptions{})
 		})
@@ -127,6 +147,13 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 	default:
 		return err
 	}
+}
+
+// relisted reports whether next is a later order of the same volume group
+// as cur: the group re-listed after a migration or an eviction, and this
+// provider won it.
+func relisted(cur, next crd.LeaseID) bool {
+	return cur.Owner == next.Owner && cur.DSeq == next.DSeq && cur.GSeq == next.GSeq && cur.OSeq != next.OSeq
 }
 
 // getVolume reads the Volume CRD of ref, refusing a record of another
@@ -161,6 +188,11 @@ func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtype
 	// index is the authority; this guards the cluster record.
 	if lease := obj.Status.AttachedLease; lease != "" && lease != lid.String() {
 		return fmt.Errorf("%w: %s attached to %s", kubeclienterrors.ErrVolumeAttached, ref, lease)
+	}
+
+	// a moved volume's data is still being copied in
+	if obj.Spec.ImportFrom != "" || obj.Status.Phase == crd.VolumePhaseImporting {
+		return fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeImporting, ref)
 	}
 
 	uobj := obj.DeepCopy()

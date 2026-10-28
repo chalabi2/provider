@@ -93,6 +93,11 @@ func (sopc *client) RetainedVolume(ctx context.Context, owner string, vid string
 		return false, err
 	}
 
+	// a copy that never finished arriving is no volume to adopt
+	if state.ImportFrom != "" {
+		return false, nil
+	}
+
 	switch crd.VolumePhase(state.Phase) {
 	case crd.VolumePhaseRetained:
 		return true, nil

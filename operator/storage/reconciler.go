@@ -22,17 +22,23 @@ import (
 	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/cluster/kube/builder"
 	clusterutil "github.com/akash-network/provider/cluster/util"
+	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	akashclientset "github.com/akash-network/provider/pkg/client/clientset/versioned"
 )
 
 // ChainQuery is the narrow chain read the reconciler needs: adoption
-// verification. A nil implementation freezes adoptions in the Adopting
-// phase (GC stays frozen) until chain access is available.
+// verification, and where a moved volume's data comes from. A nil
+// implementation freezes adoptions in the Adopting phase (GC stays frozen),
+// and volumes won on a re-listed order in Pending, until chain access is
+// available.
 type ChainQuery interface {
 	// GroupVolumePolicy returns the VolumePolicy of the on-chain group, or
 	// nil when the group is not a volume group.
 	GroupVolumePolicy(ctx context.Context, id dv1.GroupID) (*dv1.VolumePolicy, error)
+
+	// VolumeLeases returns every lease on a volume group naming owner/vid.
+	VolumeLeases(ctx context.Context, owner, vid string) ([]replication.VolumeLease, error)
 }
 
 // reconciler drives a Volume CRD to its desired state through the PV
@@ -158,6 +164,15 @@ func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 		return err
 	}
 
+	// won again on a re-listed order with the whole copy this provider
+	// held before: it is still the latest only if no provider held the
+	// volume since
+	if vol.Status.Phase == crd.VolumePhasePending && vol.Spec.ImportFrom == "" {
+		if err := r.recordImportSource(ctx, vol, true); err != nil {
+			return err
+		}
+	}
+
 	if vol.Status.AttachedLease != "" {
 		if err := r.ensureAttached(ctx, vol); err != nil {
 			return err
@@ -185,6 +200,12 @@ func (r *reconciler) gcDue(vol *crd.Volume) bool {
 // provision creates the holder PVC against the -retain class and, once the
 // binder pins a PV to it, labels the PV with the volume identity and parks.
 func (r *reconciler) provision(ctx context.Context, vol *crd.Volume) error {
+	if vol.Spec.ImportFrom == "" {
+		if err := r.recordImportSource(ctx, vol, false); err != nil {
+			return err
+		}
+	}
+
 	pvc, err := r.ensurePVC(ctx, r.volNS, vol, "")
 	if err != nil {
 		return err
@@ -225,8 +246,74 @@ func (r *reconciler) provision(ctx context.Context, vol *crd.Volume) error {
 
 	vol.Status.PVName = pv.Name
 	vol.Status.Phase = crd.VolumePhaseProvisioned
+	if vol.Spec.ImportFrom != "" {
+		vol.Status.Phase = crd.VolumePhaseImporting
+	}
 
 	return r.updateStatus(ctx, vol)
+}
+
+// recordImportSource records where a volume moved here is copied from,
+// when it was moved here at all. localCopy is whether the PV holds this
+// provider's own whole copy from its earlier lease.
+func (r *reconciler) recordImportSource(ctx context.Context, vol *crd.Volume, localCopy bool) error {
+	source, err := r.importSource(ctx, vol, localCopy)
+	if err != nil || source == "" {
+		return err
+	}
+
+	vol.Spec.ImportFrom = source
+	vol.Status.LocalCopy = localCopy
+
+	r.log.Info("volume moved here; its data will be copied in", "volume", vol.Name, "source", source)
+
+	if err := r.updateStatus(ctx, vol); err != nil {
+		return err
+	}
+
+	// a Volume CRD installed before moves existed prunes the field; parked
+	// without it, the volume would come up empty and attachable while its
+	// data is still at the source
+	if vol.Spec.ImportFrom != source {
+		return fmt.Errorf("%w: volume %s was moved here, but the installed Volume CRD drops spec.importFrom: apply the current CRD", ErrVolumeOperator, vol.Name)
+	}
+
+	return nil
+}
+
+// importSource names the provider a volume won here must be copied from.
+// The first order of a volume starts it empty. A re-listed one (a later
+// order sequence) follows a migration or an eviction, so the volume is
+// copied from the provider that held it last, unless that was this
+// provider and its copy is still here (localCopy). Without chain access
+// there is no telling, and the volume stays Pending: provisioning it as
+// empty could let a deployment attach a volume whose data is elsewhere.
+func (r *reconciler) importSource(ctx context.Context, vol *crd.Volume, localCopy bool) (string, error) {
+	lease := vol.Spec.LeaseID
+	if lease.OSeq <= 1 {
+		return "", nil
+	}
+
+	if r.chain == nil {
+		return "", fmt.Errorf("%w: volume %s was moved here but chain access is not configured", ErrVolumeOperator, vol.Name)
+	}
+
+	dseq, err := strconv.ParseUint(lease.DSeq, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid dseq %q: %s", ErrVolumeOperator, lease.DSeq, err.Error())
+	}
+
+	leases, err := r.chain.VolumeLeases(ctx, vol.Spec.Owner, vol.Spec.VID)
+	if err != nil {
+		return "", err
+	}
+
+	sources := replication.MigrationSources(leases, vol.Spec.VID, dseq, lease.Provider, localCopy)
+	if len(sources) == 0 {
+		return "", nil
+	}
+
+	return sources[0], nil
 }
 
 // maybeAdopt detects an adoption in flight - the CRD spec was rewritten to a
@@ -249,6 +336,17 @@ func (r *reconciler) maybeAdopt(ctx context.Context, vol *crd.Volume) (bool, err
 		if err := r.updateStatus(ctx, vol); err != nil {
 			return true, err
 		}
+	}
+
+	if vol.Spec.ImportFrom != "" {
+		// the copy never finished arriving: the PV holds part of the data
+		// at best, which no deployment may take as the volume
+		r.log.Error("adoption rejected: the volume never finished arriving here",
+			"volume", vol.Name, "dead_dseq", deadDSeq, "new_dseq", vol.Spec.GroupID.DSeq)
+
+		vol.Status.Phase = crd.VolumePhaseRetained
+
+		return true, r.updateStatus(ctx, vol)
 	}
 
 	if r.chain == nil {
@@ -403,11 +501,16 @@ func (r *reconciler) ensureParked(ctx context.Context, vol *crd.Volume) error {
 		r.log.Info("volume parked", "volume", vol.Name, "pv", pv.Name)
 	}
 
-	// retained volumes stay Retained (the GC clock is running); everything
-	// else parks as Provisioned
+	// retained volumes stay Retained (the GC clock is running), a volume
+	// whose data is still arriving parks as Importing, and everything else
+	// as Provisioned
 	phase := crd.VolumePhaseProvisioned
-	if vol.Status.Phase == crd.VolumePhaseRetained {
+
+	switch {
+	case vol.Status.Phase == crd.VolumePhaseRetained:
 		phase = crd.VolumePhaseRetained
+	case vol.Spec.ImportFrom != "":
+		phase = crd.VolumePhaseImporting
 	}
 
 	if vol.Status.Phase != phase {

@@ -17,6 +17,8 @@ import (
 	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+
+	"github.com/akash-network/provider/operator/storage/replication"
 )
 
 // ChainClient is the operator's chain surface: adoption verification for
@@ -46,6 +48,7 @@ type chainClient struct {
 	qc       aclient.QueryClient
 	node     sdkclient.CometRPC
 	provider string
+	volumes  replication.ChainState
 }
 
 var _ ChainClient = (*chainClient)(nil)
@@ -56,7 +59,12 @@ func newChainClient(qc aclient.QueryClient, node sdkclient.CometRPC, provider st
 		qc:       qc,
 		node:     node,
 		provider: provider,
+		volumes:  replication.NewChainState(qc),
 	}
+}
+
+func (c *chainClient) VolumeLeases(ctx context.Context, owner, vid string) ([]replication.VolumeLease, error) {
+	return c.volumes.VolumeLeases(ctx, owner, vid)
 }
 
 func (c *chainClient) GroupVolumePolicy(ctx context.Context, id dv1.GroupID) (*dv1.VolumePolicy, error) {

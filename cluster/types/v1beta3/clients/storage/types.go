@@ -21,6 +21,9 @@ type VolumeState struct {
 	// DSeq is the deployment the volume belongs to now, the adopting one
 	// once an adoption is recorded.
 	DSeq string `json:"dseq,omitempty"`
+	// ImportFrom is the provider a moved volume's data is still being
+	// copied from; empty once it all arrived.
+	ImportFrom string `json:"import-from,omitempty"`
 }
 
 // Client is the daemon's interface to the storage operator. It satisfies

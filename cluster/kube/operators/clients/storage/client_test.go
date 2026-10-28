@@ -55,12 +55,20 @@ func TestStorageClientLookups(t *testing.T) {
 	parked := crd.VolumeName(owner, "parked-vid")
 	attached := crd.VolumeName(owner, "attached-vid")
 	adopting := crd.VolumeName(owner, "adopting-vid")
+	unfinished := crd.VolumeName(owner, "unfinished-vid")
 
 	states := map[string]cstorage.VolumeState{
 		retained: {Owner: owner, VID: "retained-vid", Phase: string(crd.VolumePhaseRetained), DSeq: "10"},
 		parked:   {Owner: owner, VID: "parked-vid", Phase: string(crd.VolumePhaseProvisioned), DSeq: "11"},
 		attached: {Owner: owner, VID: "attached-vid", Phase: string(crd.VolumePhaseAttached), AttachedLease: "some-lease"},
 		adopting: {Owner: owner, VID: "adopting-vid", Phase: string(crd.VolumePhaseAdopting), DSeq: "12"},
+		unfinished: {
+			Owner:      owner,
+			VID:        "unfinished-vid",
+			Phase:      string(crd.VolumePhaseRetained),
+			DSeq:       "14",
+			ImportFrom: testutil.AccAddress(t).String(),
+		},
 	}
 
 	mux := http.NewServeMux()
@@ -103,6 +111,11 @@ func TestStorageClientLookups(t *testing.T) {
 
 	// but not another deployment's adoption
 	found, err = cl.RetainedVolume(ctx, owner, "adopting-vid", 13)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	// nor a copy that never finished arriving
+	found, err = cl.RetainedVolume(ctx, owner, "unfinished-vid", 99)
 	require.NoError(t, err)
 	require.False(t, found)
 

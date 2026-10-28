@@ -186,6 +186,113 @@ func TestDeployVolumeRefusesShrink(t *testing.T) {
 	require.Equal(t, "200", obj.Spec.Size)
 }
 
+func TestDeployVolumeRelistedOrderResetsTheRecord(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	obj, err := kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	obj.Spec.ImportFrom = "akash1previous"
+	obj.Status.Phase = crd.VolumePhaseExporting
+	obj.Status.PVName = "pvc-volume-test"
+	obj.Status.AttachedLease = "attached-before"
+	obj.Status.RetainedUntil = &until
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	relisted := lid
+	relisted.OSeq++
+
+	require.NoError(t, kc.DeployVolume(context.Background(), relisted, testVolumeGroup(t, relisted, dtypes.VolumeReclaimRetain)))
+
+	obj, err = kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	require.Equal(t, relisted, mustLeaseIDFromCRD(t, obj.Spec.LeaseID))
+	require.Equal(t, crd.VolumePhasePending, obj.Status.Phase)
+	require.Equal(t, "pvc-volume-test", obj.Status.PVName)
+	require.Empty(t, obj.Status.AttachedLease)
+	require.Nil(t, obj.Status.RetainedUntil)
+	require.Equal(t, "akash1previous", obj.Spec.ImportFrom, "a copy that never finished keeps its source")
+	require.False(t, obj.Status.LocalCopy)
+}
+
+func TestDeployVolumeRelistedOrderDecidesAfreshOverAWholeCopy(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	obj, err := kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	obj.Spec.ImportFrom = "akash1previous"
+	obj.Status.LocalCopy = true
+	obj.Status.Phase = crd.VolumePhaseExporting
+	obj.Status.PVName = "pvc-volume-test"
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	relisted := lid
+	relisted.OSeq++
+
+	require.NoError(t, kc.DeployVolume(context.Background(), relisted, testVolumeGroup(t, relisted, dtypes.VolumeReclaimRetain)))
+
+	obj, err = kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	require.Empty(t, obj.Spec.ImportFrom)
+	require.False(t, obj.Status.LocalCopy)
+	require.Equal(t, crd.VolumePhasePending, obj.Status.Phase)
+}
+
+func TestDeployVolumeKeepsWhereAMovedVolumeComesFrom(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	obj, err := kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	obj.Spec.ImportFrom = "akash1previous"
+	obj.Status.Phase = crd.VolumePhaseImporting
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	obj, err = kc.VolumeStatus(context.Background(), testVolumeRef(lid))
+	require.NoError(t, err)
+	require.Equal(t, "akash1previous", obj.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhaseImporting, obj.Status.Phase)
+}
+
+func TestAttachVolumeRefusesAVolumeStillArriving(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	ref := testVolumeRef(lid)
+	obj, err := kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	obj.Spec.ImportFrom = "akash1previous"
+	obj.Status.Phase = crd.VolumePhaseImporting
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	computeLid := testutil.LeaseID(t)
+	computeLid.Owner = lid.Owner
+
+	err = kc.AttachVolume(context.Background(), computeLid, ref)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeImporting)
+
+	obj, err = kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseImporting, obj.Status.Phase)
+	require.Empty(t, obj.Status.AttachedLease)
+}
+
 func mustLeaseIDFromCRD(t *testing.T, id crd.LeaseID) mtypes.LeaseID {
 	t.Helper()
 	lid, err := id.FromCRD()

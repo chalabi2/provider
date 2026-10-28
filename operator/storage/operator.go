@@ -47,6 +47,7 @@ type VolumeState struct {
 	Access        string `json:"access,omitempty"`
 	Bucket        string `json:"bucket,omitempty"`
 	DSeq          string `json:"dseq,omitempty"`
+	ImportFrom    string `json:"import-from,omitempty"`
 }
 
 type storageOperator struct {
@@ -720,6 +721,7 @@ func volumeState(vol *crd.Volume) VolumeState {
 		Access:        vol.Spec.Access,
 		Bucket:        vol.Status.Bucket,
 		DSeq:          vol.Spec.GroupID.DSeq,
+		ImportFrom:    vol.Spec.ImportFrom,
 	}
 
 	if vol.Status.RetainedUntil != nil {

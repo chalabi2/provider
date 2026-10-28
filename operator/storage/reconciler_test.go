@@ -21,6 +21,7 @@ import (
 
 	"github.com/akash-network/provider/cluster/kube/builder"
 	clusterutil "github.com/akash-network/provider/cluster/util"
+	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	afake "github.com/akash-network/provider/pkg/client/clientset/versioned/fake"
 )
@@ -48,11 +49,20 @@ type fakeChain struct {
 	policy *dv1.VolumePolicy
 	err    error
 	calls  int
+
+	leases      []replication.VolumeLease
+	leasesErr   error
+	leasesCalls int
 }
 
 func (f *fakeChain) GroupVolumePolicy(_ context.Context, _ dv1.GroupID) (*dv1.VolumePolicy, error) {
 	f.calls++
 	return f.policy, f.err
+}
+
+func (f *fakeChain) VolumeLeases(_ context.Context, _, _ string) ([]replication.VolumeLease, error) {
+	f.leasesCalls++
+	return f.leases, f.leasesErr
 }
 
 func makeScaffold(t *testing.T, chain *fakeChain, kobjs, aobjs []runtime.Object) *scaffold {
@@ -161,6 +171,41 @@ func holderPVC(vol *crd.Volume, pvName string) *corev1.PersistentVolumeClaim {
 	}
 }
 
+// firstOrderLease is a lease on a volume group's first order, which starts
+// the volume empty.
+func firstOrderLease(t *testing.T) mtypes.LeaseID {
+	t.Helper()
+
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 1
+
+	return lid
+}
+
+// relistedLease is a lease on the second order of a volume group, the one a
+// migration re-lists.
+func relistedLease(t *testing.T) mtypes.LeaseID {
+	t.Helper()
+
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 2
+
+	return lid
+}
+
+// heldBefore is the closed lease of the provider that held the volume before
+// lid's order re-listed.
+func heldBefore(lid mtypes.LeaseID, provider string, oseq uint32) replication.VolumeLease {
+	return replication.VolumeLease{
+		Provider: provider,
+		DSeq:     lid.DSeq,
+		OSeq:     oseq,
+		State:    mtypes.LeaseClosed,
+		Reason:   mtypes.LeaseClosedReasonVolumeMigrate,
+		Policy:   dv1.VolumePolicy{Vid: testVID},
+	}
+}
+
 func getVolume(t *testing.T, s *scaffold, name string) *crd.Volume {
 	t.Helper()
 
@@ -171,7 +216,7 @@ func getVolume(t *testing.T, s *scaffold, name string) *crd.Volume {
 }
 
 func TestReconcileProvisionCreatesHolderPVC(t *testing.T) {
-	lid := testutil.LeaseID(t)
+	lid := firstOrderLease(t)
 	vol := testVolume(t, lid, crd.VolumePhasePending)
 	s := makeScaffold(t, nil, nil, []runtime.Object{vol})
 
@@ -190,7 +235,7 @@ func TestReconcileProvisionCreatesHolderPVC(t *testing.T) {
 }
 
 func TestReconcileProvisionNodeHint(t *testing.T) {
-	lid := testutil.LeaseID(t)
+	lid := firstOrderLease(t)
 	vol := testVolume(t, lid, crd.VolumePhasePending)
 
 	classLabel := builder.AkashServiceCapabilityStorage + ".class.beta3"
@@ -223,7 +268,7 @@ func TestReconcileProvisionNodeHint(t *testing.T) {
 }
 
 func TestReconcileProvisionNodeHintNoNodes(t *testing.T) {
-	lid := testutil.LeaseID(t)
+	lid := firstOrderLease(t)
 	vol := testVolume(t, lid, crd.VolumePhasePending)
 
 	s := makeScaffold(t, nil, nil, []runtime.Object{vol})
@@ -235,7 +280,7 @@ func TestReconcileProvisionNodeHintNoNodes(t *testing.T) {
 }
 
 func TestReconcileProvisionPinsBoundPV(t *testing.T) {
-	lid := testutil.LeaseID(t)
+	lid := firstOrderLease(t)
 	vol := testVolume(t, lid, crd.VolumePhasePending)
 
 	// the binder bound the holder PVC to a freshly provisioned PV
@@ -699,4 +744,276 @@ func TestReconcileAdoptFrozenWithoutChain(t *testing.T) {
 	upv, err := s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
 	require.NoError(t, err)
 	require.Equal(t, deadDSeq, upv.Labels[LabelVolumeDSeq])
+}
+
+func TestReconcileMovedVolumeRecordsWhereItsDataIs(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	previous := testutil.AccAddress(t).String()
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, previous, 1)}}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Equal(t, previous, stored.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhasePending, stored.Status.Phase)
+
+	_, err := s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+}
+
+func TestReconcileMovedVolumeParksAsImporting(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, testutil.AccAddress(t).String(), 1)}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseImporting, stored.Status.Phase)
+	require.Equal(t, testPV, stored.Status.PVName)
+}
+
+func TestReconcileMovedVolumeAsksTheChainOnce(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, testutil.AccAddress(t).String(), 1)}}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+	require.NoError(t, s.r.reconcile(context.Background(), getVolume(t, s, vol.Name)))
+
+	require.Equal(t, 1, chain.leasesCalls)
+}
+
+func TestReconcileRelistedVolumeHeldHereLastStartsAsIs(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, lid.Provider, 1)}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Empty(t, stored.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhaseProvisioned, stored.Status.Phase)
+}
+
+func TestReconcileMovedVolumeWaitsForTheChain(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	s := makeScaffold(t, &fakeChain{leasesErr: kerrors.NewServiceUnavailable("node down")}, nil, []runtime.Object{vol})
+
+	require.Error(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
+	_, err := s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.True(t, kerrors.IsNotFound(err), "nothing is provisioned before the chain answers")
+}
+
+func TestReconcileMovedVolumeWaitsWithoutChainAccess(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	s := makeScaffold(t, nil, nil, []runtime.Object{vol})
+
+	require.ErrorIs(t, s.r.reconcile(context.Background(), vol), ErrVolumeOperator)
+
+	_, err := s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.True(t, kerrors.IsNotFound(err))
+}
+
+func TestReconcileFirstOrderNeverAsksTheChain(t *testing.T) {
+	lid := firstOrderLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	chain := &fakeChain{}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Zero(t, chain.leasesCalls)
+}
+
+func TestReconcileVolumeWonBackImportsWhatChangedElsewhere(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 3
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	elsewhere := testutil.AccAddress(t).String()
+	chain := &fakeChain{leases: []replication.VolumeLease{
+		heldBefore(lid, lid.Provider, 1),
+		heldBefore(lid, elsewhere, 2),
+	}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Equal(t, elsewhere, stored.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhaseImporting, stored.Status.Phase)
+	require.True(t, stored.Status.LocalCopy, "the copy here stands if the newer one never arrived anywhere")
+}
+
+func TestReconcileMovedVolumeHasNoCopyToFallBackOn(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, testutil.AccAddress(t).String(), 1)}}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.False(t, getVolume(t, s, vol.Name).Status.LocalCopy)
+}
+
+func TestReconcileMovedVolumeLooksPastItsOwnEmptyLease(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 3
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	holder := testutil.AccAddress(t).String()
+	chain := &fakeChain{leases: []replication.VolumeLease{
+		heldBefore(lid, holder, 1),
+		heldBefore(lid, lid.Provider, 2),
+	}}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, holder, getVolume(t, s, vol.Name).Spec.ImportFrom)
+}
+
+func TestReconcileUnfinishedImportWonAgainKeepsImporting(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 3
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	vol.Spec.ImportFrom = testutil.AccAddress(t).String()
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	chain := &fakeChain{}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseImporting, stored.Status.Phase)
+	require.Equal(t, vol.Spec.ImportFrom, stored.Spec.ImportFrom)
+	require.Zero(t, chain.leasesCalls)
+}
+
+func TestReconcileVolumeWonBackKeepsItsData(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, lid.Provider, 1)}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Empty(t, stored.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhaseProvisioned, stored.Status.Phase)
+}
+
+func TestReconcileVolumeWonBackWaitsForTheChain(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	s := makeScaffold(t, &fakeChain{leasesErr: kerrors.NewServiceUnavailable("node down")}, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.Error(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+func TestReconcileImportingVolumeStaysImportingWhenReparked(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhaseImporting)
+	vol.Spec.ImportFrom = testutil.AccAddress(t).String()
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, "lease-ns-gone", vol.Name)
+	s := makeScaffold(t, &fakeChain{}, []runtime.Object{pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhaseImporting, getVolume(t, s, vol.Name).Status.Phase)
+	upv, err := s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, testVolNS, upv.Spec.ClaimRef.Namespace)
+}
+
+func TestReconcileUnfinishedImportStaysRetained(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhaseRetained)
+	vol.Spec.ImportFrom = testutil.AccAddress(t).String()
+	vol.Status.PVName = testPV
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	vol.Status.RetainedUntil = &until
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	s := makeScaffold(t, &fakeChain{}, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+func TestReconcileAdoptRejectedForAnUnfinishedImport(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhaseRetained)
+	vol.Spec.ImportFrom = testutil.AccAddress(t).String()
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	pv.Labels[LabelVolumeDSeq] = "1"
+	chain := &fakeChain{policy: &dv1.VolumePolicy{Vid: testVID, Adopt: &dv1.VolumeRef{Owner: vol.Spec.Owner, DSeq: 1, Name: testVID}}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
+	require.Zero(t, chain.calls, "an unfinished copy is refused before the chain is asked")
+	upv, err := s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "1", upv.Labels[LabelVolumeDSeq])
+}
+
+// pruneImportSource makes the API server drop spec.importFrom on every write,
+// as a Volume CRD installed before moves existed does.
+func pruneImportSource(s *scaffold) {
+	s.ac.PrependReactor("update", "volumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		action.(ktesting.UpdateAction).GetObject().(*crd.Volume).Spec.ImportFrom = ""
+		return false, nil, nil
+	})
+}
+
+func TestReconcileMovedVolumeWaitsForACRDThatKeepsItsSource(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, testutil.AccAddress(t).String(), 1)}}
+	s := makeScaffold(t, chain, nil, []runtime.Object{vol})
+	pruneImportSource(s)
+
+	err := s.r.reconcile(context.Background(), vol)
+
+	require.ErrorContains(t, err, "apply the current CRD")
+	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
+	_, err = s.kc.CoreV1().PersistentVolumeClaims(testVolNS).Get(context.Background(), vol.Name, metav1.GetOptions{})
+	require.True(t, kerrors.IsNotFound(err), "nothing is provisioned for a volume whose source the CRD drops")
+}
+
+func TestReconcileVolumeWonBackWaitsForACRDThatKeepsItsSource(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhasePending)
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, testutil.AccAddress(t).String(), 1)}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+	pruneImportSource(s)
+
+	require.ErrorContains(t, s.r.reconcile(context.Background(), vol), "apply the current CRD")
+
+	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
 }
