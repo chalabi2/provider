@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	sdkquery "github.com/cosmos/cosmos-sdk/types/query"
 
@@ -30,8 +31,13 @@ type VolumeLease struct {
 	Provider string
 	// DSeq of the volume deployment the lease serves.
 	DSeq uint64
+	// OSeq of the order the lease won: a volume order re-lists under the
+	// next sequence each time a migration or eviction closes its lease.
+	OSeq uint32
 	// State of the lease.
 	State mv1.Lease_State
+	// Reason the lease closed, once it has.
+	Reason mv1.LeaseClosedReason
 	// Policy is the group's VolumePolicy.
 	Policy dv1.VolumePolicy
 }
@@ -54,17 +60,24 @@ type ChainState interface {
 //   - replication: the provider of an active lease on a volume whose
 //     replica_of names this volume (same owner).
 func AuthorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest, peer, self string) error {
+	_, err := authorizeExport(ctx, cs, req, peer, self)
+	return err
+}
+
+// authorizeExport runs the exporter-side gate and returns the chain's leases
+// on the volume it decided from.
+func authorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest, peer, self string) ([]VolumeLease, error) {
 	if req.Requester == "" || peer != req.Requester {
-		return fmt.Errorf("%w: requester %q does not match peer identity %q", ErrNotAuthorized, req.Requester, peer)
+		return nil, fmt.Errorf("%w: requester %q does not match peer identity %q", ErrNotAuthorized, req.Requester, peer)
 	}
 
 	if req.Requester == self {
-		return fmt.Errorf("%w: requester is the exporter itself", ErrNotAuthorized)
+		return nil, fmt.Errorf("%w: requester is the exporter itself", ErrNotAuthorized)
 	}
 
 	leases, err := cs.VolumeLeases(ctx, req.Owner, req.Vid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, lease := range leases {
@@ -78,16 +91,16 @@ func AuthorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest
 
 		// migration: the re-ordered lease lives on the same deployment
 		if lease.Policy.Vid == req.Vid && lease.DSeq == req.DSeq {
-			return nil
+			return leases, nil
 		}
 
 		// replication: the requester's volume names this one as its target
 		if ref := lease.Policy.ReplicaOf; ref != nil && ref.Owner == req.Owner && ref.Name == req.Vid {
-			return nil
+			return leases, nil
 		}
 	}
 
-	return fmt.Errorf("%w: no chain record entitles %q to volume %s/%s", ErrNotAuthorized, req.Requester, req.Owner, req.Vid)
+	return nil, fmt.Errorf("%w: no chain record entitles %q to volume %s/%s", ErrNotAuthorized, req.Requester, req.Owner, req.Vid)
 }
 
 // AuthorizeImport is the importer-side gate: before applying any byte the
@@ -124,6 +137,74 @@ func AuthorizeImport(ctx context.Context, cs ChainState, owner, vid, source stri
 	}
 
 	return fmt.Errorf("%w: no chain record backs %q as source of volume %s/%s", ErrNotAuthorized, source, owner, vid)
+}
+
+// MigrationSources lists the providers that may hold the data of volume vid
+// of deployment dseq as it moves to provider self, the most recent first:
+// the providers of its earlier leases, each closed by a migration or an
+// eviction (the only closes that re-list a volume). When self still holds
+// a whole copy from its own last lease (localCopy), the list stops there:
+// what came before it is older than that copy, so when self held the volume
+// last there is nothing to copy and the list is empty. Without one, self's
+// leases are passed over: they hold nothing to keep.
+func MigrationSources(leases []VolumeLease, vid string, dseq uint64, self string, localCopy bool) []string {
+	closed := make([]VolumeLease, 0, len(leases))
+
+	for _, lease := range leases {
+		if lease.DSeq != dseq || lease.Policy.Vid != vid || lease.State != mv1.LeaseClosed {
+			continue
+		}
+
+		switch lease.Reason {
+		case mv1.LeaseClosedReasonVolumeMigrate, mv1.LeaseClosedReasonVolumeEvict:
+			closed = append(closed, lease)
+		}
+	}
+
+	sort.SliceStable(closed, func(i, j int) bool { return closed[i].OSeq > closed[j].OSeq })
+
+	var sources []string
+
+	seen := make(map[string]bool)
+
+	for _, lease := range closed {
+		if lease.Provider == self {
+			if localCopy {
+				break
+			}
+
+			continue
+		}
+
+		if !seen[lease.Provider] {
+			seen[lease.Provider] = true
+			sources = append(sources, lease.Provider)
+		}
+	}
+
+	return sources
+}
+
+// latestLease returns provider's latest lease on volume vid of deployment
+// dseq.
+func latestLease(leases []VolumeLease, vid string, dseq uint64, provider string) (VolumeLease, bool) {
+	var (
+		latest VolumeLease
+		found  bool
+	)
+
+	for _, lease := range leases {
+		if lease.Provider != provider || lease.DSeq != dseq || lease.Policy.Vid != vid {
+			continue
+		}
+
+		if !found || lease.OSeq > latest.OSeq {
+			latest = lease
+			found = true
+		}
+	}
+
+	return latest, found
 }
 
 // queryChainState derives VolumeLeases from the chain query client: the
@@ -191,7 +272,9 @@ func (c *queryChainState) VolumeLeases(ctx context.Context, owner, vid string) (
 			out = append(out, VolumeLease{
 				Provider: lid.Provider,
 				DSeq:     lid.DSeq,
+				OSeq:     lid.OSeq,
 				State:    entry.Lease.State,
+				Reason:   entry.Lease.Reason,
 				Policy:   *policy,
 			})
 		}

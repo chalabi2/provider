@@ -22,7 +22,7 @@ const defaultPullAttempts = 5
 // stream, re-requests from the last verified offset up to attempts times.
 // Returns the total bytes landed. A checksum violation aborts immediately:
 // resuming past corrupt data is never attempted.
-func Pull(ctx context.Context, client vtv1.VolumeTransferClient, req *vtv1.ExportRequest, spool *os.File, attempts int) (uint64, error) {
+func Pull(ctx context.Context, client vtv1.VolumeTransferClient, req *vtv1.ExportRequest, spool io.WriterAt, attempts int) (uint64, error) {
 	if attempts < 1 {
 		attempts = defaultPullAttempts
 	}
@@ -46,7 +46,7 @@ func Pull(ctx context.Context, client vtv1.VolumeTransferClient, req *vtv1.Expor
 			return reached, nil
 		}
 
-		if errors.Is(err, ErrChecksumMismatch) {
+		if errors.Is(err, ErrChecksumMismatch) || errors.Is(err, ErrTooLarge) {
 			return reached, err
 		}
 
@@ -82,14 +82,26 @@ type Syncer struct {
 	Requester string
 	// SpoolDir holds in-flight pull spools; empty uses the OS temp dir.
 	SpoolDir string
+	// MaxBytes bounds the image a source may send; zero leaves it
+	// unbounded. A source is not trusted to stay within the volume it
+	// leased, and the spool lands on this provider's disk.
+	MaxBytes uint64
 
 	// last is the last snapshot applied locally - the next diff base.
 	last string
+	// final records that last is the source's final snapshot.
+	final bool
 }
 
 // Last returns the last applied snapshot id ("" before the first sync).
 func (s *Syncer) Last() string {
 	return s.last
+}
+
+// Final reports whether the last round left this side holding the source's
+// final snapshot: the whole volume, with nothing left to follow.
+func (s *Syncer) Final() bool {
+	return s.final
 }
 
 // SyncOnce performs one sync round: query Status, pull what is newer than
@@ -108,7 +120,12 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 	}
 
 	if st.LatestSnapshot == "" || st.LatestSnapshot == s.last {
+		s.final = st.Final && st.LatestSnapshot != ""
 		return "", nil
+	}
+
+	if s.MaxBytes > 0 && st.Size_ > s.MaxBytes {
+		return "", fmt.Errorf("%w: the source's image is %d bytes, past the %d this volume allows", ErrTooLarge, st.Size_, s.MaxBytes)
 	}
 
 	from := ""
@@ -122,6 +139,12 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 		}
 	}
 
+	if s.SpoolDir != "" {
+		if err := os.MkdirAll(s.SpoolDir, 0o700); err != nil {
+			return "", err
+		}
+	}
+
 	spool, err := os.CreateTemp(s.SpoolDir, "volume-pull-*")
 	if err != nil {
 		return "", err
@@ -132,13 +155,18 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 		_ = os.Remove(spool.Name())
 	}()
 
+	var sink io.WriterAt = spool
+	if s.MaxBytes > 0 {
+		sink = &boundedWriterAt{w: spool, limit: s.MaxBytes}
+	}
+
 	if _, err := Pull(ctx, s.Client, &vtv1.ExportRequest{
 		Owner:        s.Owner,
 		Vid:          s.Vid,
 		DSeq:         s.DSeq,
 		Requester:    s.Requester,
 		FromSnapshot: from,
-	}, spool, 0); err != nil {
+	}, sink, 0); err != nil {
 		return "", err
 	}
 
@@ -172,8 +200,23 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 	}
 
 	s.last = st.LatestSnapshot
+	s.final = st.Final
 
 	return st.LatestSnapshot, nil
+}
+
+// boundedWriterAt refuses writes reaching past limit.
+type boundedWriterAt struct {
+	w     io.WriterAt
+	limit uint64
+}
+
+func (b *boundedWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	if off < 0 || uint64(off)+uint64(len(p)) > b.limit { // nolint: gosec
+		return 0, fmt.Errorf("%w: the source's stream passes the %d bytes this volume allows", ErrTooLarge, b.limit)
+	}
+
+	return b.w.WriteAt(p, off)
 }
 
 func verifySpool(spool *os.File, want []byte) error {

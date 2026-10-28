@@ -2,12 +2,16 @@ package replication
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/testutil"
@@ -96,53 +100,72 @@ func (s *inprocRecvStream) Recv() (*vtv1.ExportChunk, error) {
 	return chunk, nil
 }
 
-// staticVolumeSource serves one volume.
+// staticVolumeSource serves one volume, as the test currently has it.
 type staticVolumeSource struct {
+	mu   sync.Mutex
 	info VolumeInfo
 }
 
 func (s *staticVolumeSource) Resolve(_ context.Context, _, _ string) (VolumeInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.info, nil
 }
 
-func transferScaffold(t *testing.T) (*inprocClient, *FileDriver, Ref) {
+func (s *staticVolumeSource) update(fn func(*VolumeInfo)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fn(&s.info)
+}
+
+type transferWorld struct {
+	client *inprocClient
+	src    *FileDriver
+	ref    Ref
+	vols   *staticVolumeSource
+	chain  *fakeChainState
+}
+
+func transferScaffold(t *testing.T) *transferWorld {
 	t.Helper()
 
-	srcDriver := NewFileDriver(t.TempDir())
-	srcRef := Ref{Name: "volume-eeeeeeeeeeee"}
-
-	cs := &fakeChainState{leases: []VolumeLease{
-		migrationLease(authzExporter, mv1.LeaseReclaiming),
-		migrationLease(authzRequester, mv1.LeaseActive),
-	}}
+	w := &transferWorld{
+		src: NewFileDriver(t.TempDir()),
+		ref: Ref{Name: "volume-eeeeeeeeeeee"},
+		chain: &fakeChainState{leases: []VolumeLease{
+			migrationLease(authzExporter, mv1.LeaseReclaiming),
+			migrationLease(authzRequester, mv1.LeaseActive),
+		}},
+	}
+	w.vols = &staticVolumeSource{info: VolumeInfo{Ref: w.ref, DSeq: authzDSeq, Exportable: true}}
 
 	srv := NewServer(
-		srcDriver,
-		cs,
-		&staticVolumeSource{info: VolumeInfo{Ref: srcRef, DSeq: authzDSeq, Exportable: true}},
+		w.src,
+		w.chain,
+		w.vols,
 		authzExporter,
 		testutil.Logger(t),
 		WithPeerID(func(context.Context) (string, error) { return authzRequester, nil }),
 		WithChunkSize(7), // tiny chunks exercise the framing
 	)
+	w.client = &inprocClient{srv: srv}
 
-	return &inprocClient{srv: srv}, srcDriver, srcRef
+	return w
 }
 
-func TestTransferEndToEndFullThenDiff(t *testing.T) {
-	ctx := context.Background()
+// goFinal closes the exporter's lease and stops the workload using the
+// volume.
+func (w *transferWorld) goFinal() {
+	w.chain.update(func(chain *fakeChainState) { chain.leases[0].State = mv1.LeaseClosed })
+	w.vols.update(func(info *VolumeInfo) { info.Quiesced = true })
+}
 
-	client, srcDriver, srcRef := transferScaffold(t)
-
-	original := []byte("volume state before the migration window opened")
-	writeImage(t, srcDriver, srcRef, original)
-
-	dstDriver := NewFileDriver(t.TempDir())
-	dstRef := Ref{Name: "volume-eeeeeeeeeeee"}
-
-	syncer := &Syncer{
-		Client:    client,
-		Driver:    dstDriver,
+func (w *transferWorld) syncer(t *testing.T, dst *FileDriver, dstRef Ref) *Syncer {
+	return &Syncer{
+		Client:    w.client,
+		Driver:    dst,
 		Ref:       dstRef,
 		Owner:     authzOwner,
 		Vid:       authzVID,
@@ -150,15 +173,32 @@ func TestTransferEndToEndFullThenDiff(t *testing.T) {
 		Requester: authzRequester,
 		SpoolDir:  t.TempDir(),
 	}
+}
+
+func statusReq() *vtv1.StatusRequest {
+	return &vtv1.StatusRequest{
+		Owner:     authzOwner,
+		Vid:       authzVID,
+		DSeq:      authzDSeq,
+		Requester: authzRequester,
+	}
+}
+
+func TestTransferEndToEndFullThenDiff(t *testing.T) {
+	ctx := context.Background()
+
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "volume state before the migration window opened"})
+
+	dst := NewFileDriver(t.TempDir())
+	dstRef := Ref{Name: "volume-eeeeeeeeeeee", Path: t.TempDir()}
+	syncer := w.syncer(t, dst, dstRef)
 
 	// round 1: full export (the server takes the first snapshot itself)
 	applied, err := syncer.SyncOnce(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, applied)
-
-	got, err := io.ReadAll(mustExport(t, dstDriver, dstRef, applied))
-	require.NoError(t, err)
-	require.Equal(t, original, got)
+	require.Equal(t, map[string]string{"app.db": "volume state before the migration window opened"}, readTree(t, dst, dstRef))
 
 	// in sync: nothing to pull
 	applied2, err := syncer.SyncOnce(ctx)
@@ -166,10 +206,9 @@ func TestTransferEndToEndFullThenDiff(t *testing.T) {
 	require.Empty(t, applied2)
 
 	// the source volume changes and a new snapshot lands
-	changed := []byte("volume state after more writes on the source side")
-	writeImage(t, srcDriver, srcRef, changed)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "volume state after more writes on the source side"})
 
-	_, err = srcDriver.Snapshot(ctx, srcRef)
+	_, err = w.src.Snapshot(ctx, w.ref)
 	require.NoError(t, err)
 
 	// round 2: diff from the held base
@@ -177,59 +216,219 @@ func TestTransferEndToEndFullThenDiff(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, applied3)
 	require.NotEqual(t, applied, applied3)
-
-	got, err = io.ReadAll(mustExport(t, dstDriver, dstRef, applied3))
-	require.NoError(t, err)
-	require.Equal(t, changed, got)
+	require.Equal(t, map[string]string{"app.db": "volume state after more writes on the source side"}, readTree(t, dst, dstRef))
 }
 
 func TestTransferDeniedForStranger(t *testing.T) {
 	ctx := context.Background()
 
-	client, srcDriver, srcRef := transferScaffold(t)
-	writeImage(t, srcDriver, srcRef, []byte("data"))
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "data"})
 
 	// the peer identity does not match the request's requester
-	req := &vtv1.StatusRequest{
-		Owner:     authzOwner,
-		Vid:       authzVID,
-		DSeq:      authzDSeq,
-		Requester: authzStranger,
-	}
+	req := statusReq()
+	req.Requester = authzStranger
 
-	_, err := client.Status(ctx, req)
+	_, err := w.client.Status(ctx, req)
 	require.Error(t, err)
 }
 
 func TestTransferStatusReportsDigest(t *testing.T) {
 	ctx := context.Background()
 
-	client, srcDriver, srcRef := transferScaffold(t)
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "digest me"})
 
-	content := []byte("digest me")
-	writeImage(t, srcDriver, srcRef, content)
-
-	st, err := client.Status(ctx, &vtv1.StatusRequest{
-		Owner:     authzOwner,
-		Vid:       authzVID,
-		DSeq:      authzDSeq,
-		Requester: authzRequester,
-	})
+	st, err := w.client.Status(ctx, statusReq())
 	require.NoError(t, err)
 
-	require.NotEmpty(t, st.LatestSnapshot)
-	require.EqualValues(t, len(content), st.Size_)
-	require.Len(t, st.SHA256, 32)
+	digest, err := w.src.Digest(ctx, w.ref, st.LatestSnapshot)
+	require.NoError(t, err)
+
+	require.Equal(t, digest.Size, st.Size_)
+	require.Equal(t, digest.SHA256, st.SHA256)
 	require.Contains(t, st.Snapshots, st.LatestSnapshot)
+	require.False(t, st.Final)
 }
 
-func mustExport(t *testing.T, d Driver, ref Ref, snapshot string) io.Reader {
-	t.Helper()
+func TestTransferIsNotFinalWhileTheSourceLeaseRuns(t *testing.T) {
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+	w.vols.update(func(info *VolumeInfo) { info.Quiesced = true })
 
-	rc, err := d.Export(context.Background(), ref, snapshot, "")
+	st, err := w.client.Status(context.Background(), statusReq())
 	require.NoError(t, err)
 
-	t.Cleanup(func() { _ = rc.Close() })
+	require.False(t, st.Final)
+}
 
-	return rc
+func TestTransferIsNotFinalWhileAWorkloadStillHasTheVolume(t *testing.T) {
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+	w.chain.update(func(chain *fakeChainState) { chain.leases[0].State = mv1.LeaseClosed })
+
+	st, err := w.client.Status(context.Background(), statusReq())
+	require.NoError(t, err)
+
+	require.False(t, st.Final)
+}
+
+func TestTransferFinalSnapshotHoldsTheLastWrite(t *testing.T) {
+	ctx := context.Background()
+
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "first"})
+
+	live, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "last write"})
+	w.goFinal()
+
+	final, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.True(t, final.Final)
+	require.NotEqual(t, live.LatestSnapshot, final.LatestSnapshot)
+
+	again, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.Equal(t, final.LatestSnapshot, again.LatestSnapshot, "the final snapshot is taken once")
+
+	dst := NewFileDriver(t.TempDir())
+	dstRef := Ref{Name: w.ref.Name, Path: t.TempDir()}
+	syncer := w.syncer(t, dst, dstRef)
+
+	_, err = syncer.SyncOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, syncer.Final())
+	require.Equal(t, map[string]string{"app.db": "last write"}, readTree(t, dst, dstRef))
+}
+
+func TestTransferTakesANewFinalSnapshotForEachClose(t *testing.T) {
+	ctx := context.Background()
+
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "before the first move"})
+	w.goFinal()
+
+	first, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "after the volume came back"})
+	w.chain.update(func(chain *fakeChainState) {
+		back := migrationLease(authzExporter, mv1.LeaseClosed)
+		back.OSeq = 3
+		chain.leases = append(chain.leases, back)
+	})
+
+	second, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.True(t, second.Final)
+	require.NotEqual(t, first.LatestSnapshot, second.LatestSnapshot)
+}
+
+func TestTransferTakesAnotherFinalSnapshotWhenItsOwnIsGone(t *testing.T) {
+	ctx := context.Background()
+
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+	w.goFinal()
+
+	first, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+
+	file, _ := w.src.snapPath(w.ref, first.LatestSnapshot)
+	require.NoError(t, os.Remove(file))
+
+	second, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.True(t, second.Final)
+	require.NotEqual(t, first.LatestSnapshot, second.LatestSnapshot)
+
+	again, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.Equal(t, second.LatestSnapshot, again.LatestSnapshot)
+}
+
+func TestSyncerIsFinalOnlyOnceItHoldsTheFinalSnapshot(t *testing.T) {
+	ctx := context.Background()
+
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+
+	dst := NewFileDriver(t.TempDir())
+	syncer := w.syncer(t, dst, Ref{Name: w.ref.Name, Path: t.TempDir()})
+
+	_, err := syncer.SyncOnce(ctx)
+	require.NoError(t, err)
+	require.False(t, syncer.Final())
+
+	_, err = syncer.SyncOnce(ctx)
+	require.NoError(t, err)
+	require.False(t, syncer.Final())
+
+	w.goFinal()
+
+	applied, err := syncer.SyncOnce(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, applied)
+	require.True(t, syncer.Final())
+
+	_, err = syncer.SyncOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, syncer.Final())
+}
+
+func TestSyncerRefusesAnImageLargerThanTheVolume(t *testing.T) {
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "more than the destination leased"})
+
+	dst := NewFileDriver(t.TempDir())
+	dstRef := Ref{Name: w.ref.Name, Path: t.TempDir()}
+	syncer := w.syncer(t, dst, dstRef)
+	syncer.MaxBytes = 16
+
+	_, err := syncer.SyncOnce(context.Background())
+	require.ErrorIs(t, err, ErrTooLarge)
+	require.Empty(t, readTree(t, dst, dstRef))
+}
+
+func TestPullStopsAStreamPastTheVolume(t *testing.T) {
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "a stream that keeps going"})
+
+	spool, err := os.CreateTemp(t.TempDir(), "spool-*")
+	require.NoError(t, err)
+	defer func() { _ = spool.Close() }()
+
+	req := exportReq()
+	_, err = Pull(context.Background(), w.client, req, &boundedWriterAt{w: spool, limit: 16}, 3)
+	require.ErrorIs(t, err, ErrTooLarge)
+}
+
+func TestTransferRefusesAVolumeThatNeverFinishedArriving(t *testing.T) {
+	w := transferScaffold(t)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "half a copy"})
+	w.vols.update(func(info *VolumeInfo) { info.Incomplete = true })
+
+	_, err := w.client.Status(context.Background(), statusReq())
+	require.True(t, IsImportIncomplete(err))
+
+	err = w.client.srv.Export(exportReq(), &inprocSendStream{pipe: &inprocPipe{ctx: context.Background(), ch: make(chan *vtv1.ExportChunk, 1)}})
+	require.True(t, IsImportIncomplete(err))
+}
+
+func TestTransferRefusesAVolumeItCannotExport(t *testing.T) {
+	w := transferScaffold(t)
+	w.vols.update(func(info *VolumeInfo) { info.Exportable = false })
+
+	_, err := w.client.Status(context.Background(), statusReq())
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.False(t, IsImportIncomplete(err))
+}
+
+func TestIsImportIncompleteIgnoresOtherErrors(t *testing.T) {
+	require.False(t, IsImportIncomplete(errors.New("plain")))
+	require.False(t, IsImportIncomplete(status.Error(codes.FailedPrecondition, "not exportable")))
+	require.False(t, IsImportIncomplete(nil))
 }

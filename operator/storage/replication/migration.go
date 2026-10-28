@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"cosmossdk.io/log"
@@ -11,46 +12,60 @@ import (
 // runner drives (DESIGN.md §9.3). Everything chain- or cluster-facing is
 // behind a function so the state machine is testable with fakes.
 type MigrationDeps struct {
-	// Sync performs one sync round against the source (Syncer.SyncOnce
-	// in production): the first call lands the full export, later calls
-	// land diffs. Returns the applied snapshot, or "" when in sync.
-	Sync func(ctx context.Context) (string, error)
+	// Sources are the providers that may hold the volume's data, the most
+	// recent first (MigrationSources).
+	Sources []string
 
-	// SourceClosed reports whether the source's volume lease has closed
-	// (cascade-detach ran; the image is quiesced). The final export-diff
-	// happens after this turns true.
-	SourceClosed func(ctx context.Context) (bool, error)
+	// Sync performs one sync round against source (Syncer.SyncOnce in
+	// production): the first call lands the full export, later calls what
+	// changed since. final reports that this side now holds the source's
+	// final snapshot, so the copy is whole.
+	Sync func(ctx context.Context, source string) (final bool, err error)
 
-	// Park flips the destination Volume CRD to Parked and reports ready.
+	// Park flips the destination Volume CRD from Importing to Provisioned:
+	// the volume is whole and may attach.
 	Park func(ctx context.Context) error
 
-	// CloseBid gives the order back: if the import cannot complete, the
-	// destination closes its bid and the order re-lists while the source
-	// holds data through window + retention.
-	CloseBid func(ctx context.Context) error
+	// Evict gives the lease back when the copy cannot complete: a
+	// volume_evict reclamation, after which the order re-lists while the
+	// sources keep the data through their retention.
+	Evict func(ctx context.Context) error
 
-	// Interval paces the periodic diff pulls while the source is live.
+	// KeepLocal reports that this side holds a whole copy from its own
+	// earlier lease, older than every source. If none of the sources ever
+	// held the volume, that copy is the latest, and the volume parks with
+	// it rather than being evicted.
+	KeepLocal bool
+
+	// Interval paces the sync rounds.
 	Interval time.Duration
 
-	// MaxFailures bounds consecutive sync failures before the migration
-	// is abandoned (bid closed).
+	// MaxFailures bounds consecutive failed rounds before the migration is
+	// abandoned and the lease evicted.
 	MaxFailures int
 }
 
 const (
-	defaultMigrationInterval = 5 * time.Minute
-	defaultMaxFailures       = 5
+	defaultMigrationInterval = time.Minute
+	defaultMaxFailures       = 30
 )
+
+// ErrNoSource flags a migration with no provider to copy from.
+var ErrNoSource = errors.New("volume replication: no provider holds the volume")
 
 // RunMigration drives a volume migration on the destination provider:
 //
-//	full export -> periodic diffs -> source lease closed (quiesce) ->
-//	final export-diff -> CRD Parked
+//	full export -> rounds while the source runs -> source final (its lease
+//	closed, its workloads stopped) -> final snapshot landed -> CRD Parked
 //
-// Any terminal failure closes the destination's bid so the order
-// re-lists; the source holds data through window + retention either way.
-// The runner holds no state that is not re-derivable: restarted, it
-// re-pulls a full export and converges the same way.
+// A source that never finished importing the volume itself refuses with
+// ReasonImportIncomplete, and the runner moves on to the one before it. A
+// source that cannot serve for MaxFailures rounds in a row ends the
+// migration: the destination evicts its lease so the order re-lists, and
+// the sources hold the data through their retention. The context ending
+// (the daemon stopping, or the lease leaving Importing) ends the runner
+// without evicting. Nothing is held that is not re-derivable: restarted,
+// the runner pulls a full export again and converges the same way.
 func RunMigration(ctx context.Context, deps MigrationDeps, logger log.Logger) error {
 	interval := deps.Interval
 	if interval <= 0 {
@@ -63,50 +78,79 @@ func RunMigration(ctx context.Context, deps MigrationDeps, logger log.Logger) er
 	}
 
 	abandon := func(cause error) error {
-		logger.Error("migration abandoned; closing bid", "err", cause)
+		logger.Error("migration abandoned; evicting the volume lease", "err", cause)
 
-		if err := deps.CloseBid(ctx); err != nil {
-			logger.Error("closing bid", "err", err)
+		if err := deps.Evict(ctx); err != nil {
+			logger.Error("evicting the volume lease", "err", err)
 		}
 
 		return cause
 	}
 
-	failures := 0
-
-	for {
-		closed, err := deps.SourceClosed(ctx)
-		if err != nil {
+	keepLocal := func(cause error) error {
+		if err := deps.Park(ctx); err != nil {
 			return abandon(err)
 		}
 
-		if _, err := deps.Sync(ctx); err != nil {
+		logger.Info("no provider since held the volume; keeping the copy here", "cause", cause)
+
+		return nil
+	}
+
+	if len(deps.Sources) == 0 {
+		if deps.KeepLocal {
+			return keepLocal(ErrNoSource)
+		}
+
+		return abandon(ErrNoSource)
+	}
+
+	source := 0
+	failures := 0
+
+	for {
+		final, err := deps.Sync(ctx, deps.Sources[source])
+		if err == nil && final {
+			err = deps.Park(ctx)
+			if err == nil {
+				logger.Info("migration complete; volume parked", "source", deps.Sources[source])
+				return nil
+			}
+		}
+
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case err == nil:
+			failures = 0
+		case IsImportIncomplete(err):
+			logger.Info("source never finished importing the volume; trying the one before it", "source", deps.Sources[source])
+
+			source++
+			failures = 0
+
+			if source == len(deps.Sources) {
+				if deps.KeepLocal {
+					return keepLocal(err)
+				}
+
+				return abandon(err)
+			}
+
+			continue
+		default:
 			failures++
 
-			logger.Error("migration sync", "err", err, "failures", failures)
+			logger.Error("migration round", "err", err, "source", deps.Sources[source], "failures", failures)
 
 			if failures >= maxFailures {
 				return abandon(err)
-			}
-		} else {
-			failures = 0
-
-			if closed {
-				// the source was already quiesced when this round pulled:
-				// that round was the final export-diff
-				if err := deps.Park(ctx); err != nil {
-					return abandon(err)
-				}
-
-				logger.Info("migration complete; volume parked")
-
-				return nil
 			}
 		}
 
 		select {
 		case <-ctx.Done():
-			return abandon(ctx.Err())
+			return ctx.Err()
 		case <-time.After(interval):
 		}
 	}

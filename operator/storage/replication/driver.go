@@ -45,6 +45,9 @@ var (
 	// ErrNotImplemented flags a driver seam that is present but not built
 	// (rbd-mirror).
 	ErrNotImplemented = errors.New("volume replication: driver not implemented")
+	// ErrTooLarge flags a source sending more than the destination volume
+	// can hold. The transfer is aborted, never retried.
+	ErrTooLarge = errors.New("volume replication: image too large")
 )
 
 // Ref locates a volume's backing image for a driver. Name is always set

@@ -12,41 +12,53 @@ import (
 	"pkg.akt.dev/go/testutil"
 )
 
-// fakeMigration is the fake-CRD world the migration runner drives: sync
-// rounds mutate counters instead of volumes.
+// fakeMigration is the world the migration runner drives: each source
+// answers its rounds from a script, and parking and evicting are recorded.
 type fakeMigration struct {
-	syncs        int
-	syncErrs     map[int]error // 1-based round -> error
-	closedAfter  int           // source lease closes after this many syncs
-	parked       bool
-	bidClosed    bool
-	sourceErr    error
-	sourceClosed bool
+	rounds   map[string][]roundResult
+	synced   []string
+	parkErrs []error
+	parked   bool
+	evicted  bool
 }
 
-func (f *fakeMigration) deps() MigrationDeps {
+type roundResult struct {
+	final bool
+	err   error
+}
+
+func (f *fakeMigration) deps(sources ...string) MigrationDeps {
 	return MigrationDeps{
-		Sync: func(_ context.Context) (string, error) {
-			f.syncs++
-			if err := f.syncErrs[f.syncs]; err != nil {
-				return "", err
+		Sources: sources,
+		Sync: func(_ context.Context, source string) (bool, error) {
+			f.synced = append(f.synced, source)
+
+			script := f.rounds[source]
+			if len(script) == 0 {
+				return false, nil
 			}
 
-			return fmt.Sprintf("snap-%08d", f.syncs), nil
-		},
-		SourceClosed: func(_ context.Context) (bool, error) {
-			if f.sourceErr != nil {
-				return false, f.sourceErr
+			round := script[0]
+			if len(script) > 1 {
+				f.rounds[source] = script[1:]
 			}
 
-			return f.sourceClosed || (f.closedAfter > 0 && f.syncs >= f.closedAfter), nil
+			return round.final, round.err
 		},
 		Park: func(_ context.Context) error {
+			if len(f.parkErrs) > 0 {
+				err := f.parkErrs[0]
+				f.parkErrs = f.parkErrs[1:]
+
+				return err
+			}
+
 			f.parked = true
+
 			return nil
 		},
-		CloseBid: func(_ context.Context) error {
-			f.bidClosed = true
+		Evict: func(_ context.Context) error {
+			f.evicted = true
 			return nil
 		},
 		Interval:    time.Millisecond,
@@ -54,90 +66,203 @@ func (f *fakeMigration) deps() MigrationDeps {
 	}
 }
 
-func TestMigrationHappyPath(t *testing.T) {
-	// round 1: full pull, source still live; round 2: diff, source still
-	// live; round 3 observes the source closed BEFORE pulling - that pull
-	// is the final export-diff and the volume parks
-	f := &fakeMigration{closedAfter: 2}
+func incompleteRefusal() error {
+	return importIncompleteError(authzOwner, authzVID)
+}
 
-	err := RunMigration(context.Background(), f.deps(), testutil.Logger(t))
+func TestMigrationParksOnceTheSourceIsFinal(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{
+		authzExporter: {{}, {}, {final: true}},
+	}}
+
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
 	require.NoError(t, err)
 
 	require.True(t, f.parked)
-	require.False(t, f.bidClosed)
-	require.Equal(t, 3, f.syncs)
+	require.False(t, f.evicted)
+	require.Len(t, f.synced, 3)
 }
 
-func TestMigrationImmediateCutover(t *testing.T) {
-	// the source was already closed when the migration started
-	// (cascade-detach ran at close): one final full pull, then park
-	f := &fakeMigration{sourceClosed: true}
+func TestMigrationParksAtOnceFromAFinalSource(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{final: true}}}}
 
-	err := RunMigration(context.Background(), f.deps(), testutil.Logger(t))
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
 	require.NoError(t, err)
 
 	require.True(t, f.parked)
-	require.False(t, f.bidClosed)
-	require.Equal(t, 1, f.syncs)
+	require.Len(t, f.synced, 1)
 }
 
-func TestMigrationTransientFailureRecovers(t *testing.T) {
-	f := &fakeMigration{
-		closedAfter: 3,
-		syncErrs:    map[int]error{2: errors.New("stream broke")},
-	}
+func TestMigrationRecoversFromATransientFailure(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{
+		authzExporter: {{err: errors.New("stream broke")}, {err: errors.New("stream broke")}, {final: true}},
+	}}
 
-	err := RunMigration(context.Background(), f.deps(), testutil.Logger(t))
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
 	require.NoError(t, err)
 
 	require.True(t, f.parked)
-	require.False(t, f.bidClosed)
+	require.False(t, f.evicted)
 }
 
-func TestMigrationExhaustedFailuresClosesBid(t *testing.T) {
-	boom := errors.New("import keeps failing")
+func TestMigrationEvictsWhenTheSourceKeepsFailing(t *testing.T) {
+	boom := errors.New("source unreachable")
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{err: boom}}}}
 
-	f := &fakeMigration{
-		syncErrs: map[int]error{1: boom, 2: boom, 3: boom},
-	}
-
-	err := RunMigration(context.Background(), f.deps(), testutil.Logger(t))
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
 	require.ErrorIs(t, err, boom)
 
-	// the destination gives the order back; the source holds through
-	// window + retention
-	require.True(t, f.bidClosed)
+	require.True(t, f.evicted)
 	require.False(t, f.parked)
-	require.Equal(t, 3, f.syncs)
+	require.Len(t, f.synced, 3)
 }
 
-func TestMigrationSourceProbeFailureClosesBid(t *testing.T) {
-	boom := errors.New("chain unreachable")
+func TestMigrationNeverFallsBackPastASourceThatFails(t *testing.T) {
+	boom := errors.New("source unreachable")
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{err: boom}}}}
 
-	f := &fakeMigration{sourceErr: boom}
+	err := RunMigration(context.Background(), f.deps(authzExporter, authzStranger), testutil.Logger(t))
+	require.ErrorIs(t, err, boom)
+
+	require.NotContains(t, f.synced, authzStranger)
+	require.True(t, f.evicted)
+}
+
+func TestMigrationLooksPastASourceThatNeverFinishedImporting(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{
+		authzExporter: {{err: incompleteRefusal()}},
+		authzStranger: {{final: true}},
+	}}
+
+	err := RunMigration(context.Background(), f.deps(authzExporter, authzStranger), testutil.Logger(t))
+	require.NoError(t, err)
+
+	require.Equal(t, []string{authzExporter, authzStranger}, f.synced)
+	require.True(t, f.parked)
+}
+
+func TestMigrationEvictsWhenNoSourceHoldsTheVolume(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{err: incompleteRefusal()}}}}
+
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
+	require.True(t, IsImportIncomplete(err))
+
+	require.True(t, f.evicted)
+	require.False(t, f.parked)
+}
+
+func TestMigrationKeepsTheCopyHereWhenNoSourceEverHeldTheVolume(t *testing.T) {
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{err: incompleteRefusal()}}}}
+	deps := f.deps(authzExporter)
+	deps.KeepLocal = true
+
+	require.NoError(t, RunMigration(context.Background(), deps, testutil.Logger(t)))
+
+	require.True(t, f.parked)
+	require.False(t, f.evicted)
+}
+
+func TestMigrationKeepsTheCopyHereWithoutASource(t *testing.T) {
+	f := &fakeMigration{}
+	deps := f.deps()
+	deps.KeepLocal = true
+
+	require.NoError(t, RunMigration(context.Background(), deps, testutil.Logger(t)))
+
+	require.True(t, f.parked)
+	require.Empty(t, f.synced)
+}
+
+func TestMigrationNeverKeepsTheCopyHereOverASourceThatFails(t *testing.T) {
+	boom := errors.New("source unreachable")
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{err: boom}}}}
+	deps := f.deps(authzExporter)
+	deps.KeepLocal = true
+
+	require.ErrorIs(t, RunMigration(context.Background(), deps, testutil.Logger(t)), boom)
+
+	require.True(t, f.evicted)
+	require.False(t, f.parked)
+}
+
+func TestMigrationEvictsWhenKeepingTheCopyHereFails(t *testing.T) {
+	f := &fakeMigration{parkErrs: []error{errors.New("conflict")}}
+	deps := f.deps()
+	deps.KeepLocal = true
+
+	require.Error(t, RunMigration(context.Background(), deps, testutil.Logger(t)))
+
+	require.True(t, f.evicted)
+}
+
+func TestMigrationEvictsWithoutASource(t *testing.T) {
+	f := &fakeMigration{}
 
 	err := RunMigration(context.Background(), f.deps(), testutil.Logger(t))
-	require.ErrorIs(t, err, boom)
-	require.True(t, f.bidClosed)
-	require.False(t, f.parked)
+	require.ErrorIs(t, err, ErrNoSource)
+
+	require.True(t, f.evicted)
+	require.Empty(t, f.synced)
 }
 
-func TestMigrationContextCancelClosesBid(t *testing.T) {
+func TestMigrationRetriesParking(t *testing.T) {
+	f := &fakeMigration{
+		rounds:   map[string][]roundResult{authzExporter: {{final: true}}},
+		parkErrs: []error{errors.New("conflict")},
+	}
+
+	err := RunMigration(context.Background(), f.deps(authzExporter), testutil.Logger(t))
+	require.NoError(t, err)
+
+	require.True(t, f.parked)
+	require.Len(t, f.synced, 2)
+}
+
+func TestMigrationStopsWithoutEvictingWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	f := &fakeMigration{}
-
-	deps := f.deps()
-	deps.Sync = func(_ context.Context) (string, error) {
-		f.syncs++
+	deps := f.deps(authzExporter)
+	deps.Sync = func(_ context.Context, _ string) (bool, error) {
 		cancel()
-		return "snap-00000001", nil
+		return false, context.Canceled
 	}
 
 	err := RunMigration(ctx, deps, testutil.Logger(t))
 	require.ErrorIs(t, err, context.Canceled)
-	require.True(t, f.bidClosed)
+
+	require.False(t, f.evicted)
 	require.False(t, f.parked)
+}
+
+func TestMigrationStopsBetweenRoundsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	f := &fakeMigration{}
+	deps := f.deps(authzExporter)
+	deps.Interval = time.Hour
+	deps.Sync = func(_ context.Context, _ string) (bool, error) {
+		cancel()
+		return false, nil
+	}
+
+	err := RunMigration(ctx, deps, testutil.Logger(t))
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.False(t, f.evicted)
+}
+
+func TestMigrationDefaultsItsPace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	f := &fakeMigration{rounds: map[string][]roundResult{authzExporter: {{final: true}}}}
+	deps := f.deps(authzExporter)
+	deps.Interval = 0
+	deps.MaxFailures = 0
+	defer cancel()
+
+	require.NoError(t, RunMigration(ctx, deps, testutil.Logger(t)))
+	require.True(t, f.parked)
 }
 
 func TestReplicaLoopSyncsUntilCancelled(t *testing.T) {

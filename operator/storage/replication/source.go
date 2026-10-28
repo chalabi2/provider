@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -58,6 +60,7 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 		// Releasing is the only phase past the point of no return; a
 		// Pending volume simply has no PV yet
 		Exportable: vol.Status.PVName != "" && vol.Status.Phase != crd.VolumePhaseReleasing,
+		Incomplete: vol.Spec.ImportFrom != "",
 	}
 
 	if vol.Status.PVName == "" {
@@ -66,6 +69,10 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 
 	pv, err := s.kc.CoreV1().PersistentVolumes().Get(ctx, vol.Status.PVName, metav1.GetOptions{})
 	if err != nil {
+		return VolumeInfo{}, err
+	}
+
+	if info.Quiesced, err = s.quiesced(ctx, pv); err != nil {
 		return VolumeInfo{}, err
 	}
 
@@ -82,6 +89,58 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 	}
 
 	return info, nil
+}
+
+// quiesced reports that nothing can write to the PV any more: no pod mounts
+// the claim it is bound to, and no node still has it attached. A pod is gone
+// once its mounts are, but a node unstages the volume (flushing what the
+// filesystem still caches) only afterwards, which the volume attachment's
+// removal confirms for CSI volumes.
+func (s *crdVolumeSource) quiesced(ctx context.Context, pv *corev1.PersistentVolume) (bool, error) {
+	if claim := pv.Spec.ClaimRef; claim != nil {
+		pods, err := s.kc.CoreV1().Pods(claim.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		for i := range pods.Items {
+			if podMountsClaim(&pods.Items[i], claim.Name) {
+				return false, nil
+			}
+		}
+	}
+
+	attachments, err := s.kc.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// a provider not granted volume attachments falls back to the pods
+		if kerrors.IsForbidden(err) {
+			return true, nil
+		}
+
+		return false, err
+	}
+
+	for _, attachment := range attachments.Items {
+		if name := attachment.Spec.Source.PersistentVolumeName; name != nil && *name == pv.Name {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func podMountsClaim(pod *corev1.Pod, claim string) bool {
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return false
+	}
+
+	for _, volume := range pod.Spec.Volumes {
+		if pvc := volume.PersistentVolumeClaim; pvc != nil && pvc.ClaimName == claim {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NewAutoDriver dispatches per volume: RBD-backed refs (pool/image

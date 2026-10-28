@@ -39,6 +39,9 @@ const (
 	VolumePhaseExporting VolumePhase = "Exporting"
 	// VolumePhaseReleasing - past retainedUntil; PV + image being destroyed.
 	VolumePhaseReleasing VolumePhase = "Releasing"
+	// VolumePhaseImporting - PV provisioned for a volume moved here from
+	// another provider; its data is being copied in, so nothing attaches.
+	VolumePhaseImporting VolumePhase = "Importing"
 )
 
 const volumeNameHashLen = 12
@@ -91,6 +94,9 @@ type VolumeSpec struct {
 	// Access is how deployments reach the data: "bucket" for an S3 bucket
 	// served over the network, empty for a mounted volume.
 	Access string `json:"access,omitempty"`
+	// ImportFrom is the provider a moved volume's data is copied from; empty
+	// for a volume that starts here.
+	ImportFrom string `json:"importFrom,omitempty"`
 }
 
 // VolumeStatus is the storage operator's reconciliation record.
@@ -110,6 +116,10 @@ type VolumeStatus struct {
 	BucketDSeq string `json:"bucketDSeq,omitempty"`
 	// BucketSize is the quota last applied to the bucket, in bytes.
 	BucketSize string `json:"bucketSize,omitempty"`
+	// LocalCopy reports that, while a moved volume is copied in, the PV
+	// already holds this provider's own whole copy from its earlier lease.
+	// If no provider since ever held the volume, that copy stands.
+	LocalCopy bool `json:"localCopy,omitempty"`
 }
 
 // VolumeName derives the deterministic CRD object name for a volume:

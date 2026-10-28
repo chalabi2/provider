@@ -685,6 +685,8 @@ spec:
                 access:
                   type: string
                   enum: ["", "bucket"]
+                importFrom:
+                  type: string
             status:
               type: object
               properties:
@@ -704,3 +706,5 @@ spec:
                   format: uint64
                 bucketSize:
                   type: string
+                localCopy:
+                  type: boolean

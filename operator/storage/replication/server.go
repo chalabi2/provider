@@ -5,8 +5,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -14,6 +16,7 @@ import (
 
 	"cosmossdk.io/log"
 
+	mv1 "pkg.akt.dev/go/node/market/v1"
 	vtv1 "pkg.akt.dev/go/volume/v1"
 )
 
@@ -27,6 +30,47 @@ type VolumeInfo struct {
 	// exports (anything with a provisioned PV that is not being
 	// destroyed).
 	Exportable bool
+	// Incomplete reports a volume moved here whose copy never finished
+	// arriving: it holds nothing anyone may take.
+	Incomplete bool
+	// Quiesced reports that no workload has the volume mounted, so nothing
+	// can write to it.
+	Quiesced bool
+}
+
+// ReasonImportIncomplete is the ErrorInfo reason of a refusal from a
+// provider whose own copy of the volume never finished arriving: it never
+// held the data, so a destination looks for it further back.
+const ReasonImportIncomplete = "VOLUME_IMPORT_INCOMPLETE"
+
+const errorDomain = "akash.network"
+
+func importIncompleteError(owner, vid string) error {
+	st := status.New(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s never finished arriving here", owner, vid))
+
+	detailed, err := st.WithDetails(&errdetails.ErrorInfo{Reason: ReasonImportIncomplete, Domain: errorDomain})
+	if err != nil {
+		return st.Err()
+	}
+
+	return detailed.Err()
+}
+
+// IsImportIncomplete reports whether err is a source's refusal of a volume
+// it never finished importing.
+func IsImportIncomplete(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Reason == ReasonImportIncomplete && info.Domain == errorDomain {
+			return true
+		}
+	}
+
+	return false
 }
 
 // VolumeSource resolves a local volume by its data-continuity identity.
@@ -53,6 +97,12 @@ type Server struct {
 	chunkSize int
 	now       func() time.Time
 	log       log.Logger
+
+	// final holds the snapshot taken once a volume went final, keyed by the
+	// volume and the lease whose close made it final; every later export of
+	// that close serves it
+	mu    sync.Mutex
+	final map[string]string
 }
 
 var _ vtv1.VolumeTransferServer = (*Server)(nil)
@@ -82,6 +132,7 @@ func NewServer(driver Driver, chain ChainState, vols VolumeSource, self string, 
 		chunkSize: DefaultChunkSize,
 		now:       time.Now,
 		log:       logger.With("module", "volume-transfer"),
+		final:     make(map[string]string),
 	}
 
 	for _, opt := range opts {
@@ -121,37 +172,50 @@ func peerAddress(cert *x509.Certificate) (string, error) {
 	return cert.Subject.CommonName, nil
 }
 
-// authorize runs the exporter-side gate shared by Export and Status.
-func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, requester string) (VolumeInfo, error) {
+// authorize runs the exporter-side gate shared by Export and Status. When
+// the volume is final (this provider's lease on it has closed and no
+// workload has it mounted, so it cannot change again) it also returns the
+// key its final snapshot is kept under; empty otherwise.
+func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, requester string) (VolumeInfo, string, error) {
 	peerAddr, err := s.peerID(ctx)
 	if err != nil {
-		return VolumeInfo{}, status.Error(codes.Unauthenticated, err.Error())
+		return VolumeInfo{}, "", status.Error(codes.Unauthenticated, err.Error())
 	}
 
 	req := &vtv1.ExportRequest{Owner: owner, Vid: vid, DSeq: dseq, Requester: requester}
 
-	if err := AuthorizeExport(ctx, s.chain, req, peerAddr, s.self); err != nil {
+	leases, err := authorizeExport(ctx, s.chain, req, peerAddr, s.self)
+	if err != nil {
 		if errors.Is(err, ErrNotAuthorized) {
-			return VolumeInfo{}, status.Error(codes.PermissionDenied, err.Error())
+			return VolumeInfo{}, "", status.Error(codes.PermissionDenied, err.Error())
 		}
 
-		return VolumeInfo{}, status.Error(codes.Unavailable, err.Error())
+		return VolumeInfo{}, "", status.Error(codes.Unavailable, err.Error())
 	}
 
 	info, err := s.vols.Resolve(ctx, owner, vid)
 	if err != nil {
-		return VolumeInfo{}, status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s: %s", owner, vid, err.Error()))
+		return VolumeInfo{}, "", status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s: %s", owner, vid, err.Error()))
 	}
 
 	if info.DSeq != dseq {
-		return VolumeInfo{}, status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s is not deployment %d here", owner, vid, dseq))
+		return VolumeInfo{}, "", status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s is not deployment %d here", owner, vid, dseq))
+	}
+
+	if info.Incomplete {
+		return VolumeInfo{}, "", importIncompleteError(owner, vid)
 	}
 
 	if !info.Exportable {
-		return VolumeInfo{}, status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not exportable", owner, vid))
+		return VolumeInfo{}, "", status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not exportable", owner, vid))
 	}
 
-	return info, nil
+	own, held := latestLease(leases, vid, dseq, s.self)
+	if !info.Quiesced || !held || own.State != mv1.LeaseClosed {
+		return info, "", nil
+	}
+
+	return info, fmt.Sprintf("%s@%d", info.Ref.Name, own.OSeq), nil
 }
 
 // Export streams the volume image at the latest held snapshot: full when
@@ -160,12 +224,12 @@ func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, 
 func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_ExportServer) error {
 	ctx := stream.Context()
 
-	info, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return err
 	}
 
-	snap, err := s.exportSnapshot(ctx, info.Ref)
+	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)
 	if err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
@@ -195,10 +259,15 @@ func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_Expo
 	return nil
 }
 
-// exportSnapshot picks the snapshot exports serve from: the most recent
-// held one, or a fresh one when none exists yet. Exports never read the
-// live image.
-func (s *Server) exportSnapshot(ctx context.Context, ref Ref) (Snapshot, error) {
+// exportSnapshot picks the snapshot exports serve from. While the volume
+// can still change that is the most recent one held, or a fresh one when
+// none is. Once it is final, it is a snapshot taken after that, so it holds
+// the last write. Exports never read the live image.
+func (s *Server) exportSnapshot(ctx context.Context, ref Ref, finalKey string) (Snapshot, error) {
+	if finalKey != "" {
+		return s.finalSnapshot(ctx, ref, finalKey)
+	}
+
 	snaps, err := s.driver.Snapshots(ctx, ref)
 	if err != nil {
 		return Snapshot{}, err
@@ -211,15 +280,47 @@ func (s *Server) exportSnapshot(ctx context.Context, ref Ref) (Snapshot, error) 
 	return s.driver.Snapshot(ctx, ref)
 }
 
+// finalSnapshot takes the volume's final snapshot once and serves it from
+// then on. A restart takes another, which holds the same data.
+func (s *Server) finalSnapshot(ctx context.Context, ref Ref, key string) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if id, taken := s.final[key]; taken {
+		snaps, err := s.driver.Snapshots(ctx, ref)
+		if err != nil {
+			return Snapshot{}, err
+		}
+
+		for _, snap := range snaps {
+			if snap.ID == id {
+				return snap, nil
+			}
+		}
+	}
+
+	snap, err := s.driver.Snapshot(ctx, ref)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	s.final[key] = snap.ID
+
+	s.log.Info("volume final snapshot taken", "volume", ref.Name, "snapshot", snap.ID)
+
+	return snap, nil
+}
+
 // Status reports the snapshots held, the whole-image digest at the latest
-// one, and the sync lag a destination syncing from it would carry.
+// one, the sync lag a destination syncing from it would carry, and whether
+// that snapshot is final.
 func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.StatusResponse, error) {
-	info, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return nil, err
 	}
 
-	snap, err := s.exportSnapshot(ctx, info.Ref)
+	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -239,6 +340,7 @@ func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.Sta
 		LatestSnapshot: snap.ID,
 		Size_:          digest.Size,
 		SHA256:         digest.SHA256,
+		Final:          finalKey != "",
 	}
 
 	for _, sn := range snaps {
