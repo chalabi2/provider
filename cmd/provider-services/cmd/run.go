@@ -121,6 +121,7 @@ const (
 	FlagVolumeReplicationDir             = "volume-replication-dir"
 	FlagVolumeReplicaSyncInterval        = "volume-replica-sync-interval"
 	FlagVolumeTransferPort               = "volume-transfer-port"
+	FlagVolumeTransferEndpoints          = "volume-transfer-endpoints"
 	FlagVolumeMigrationInterval          = "volume-migration-interval"
 	FlagManifestTimeout                  = "manifest-timeout"
 	FlagMetricsListener                  = "metrics-listener"

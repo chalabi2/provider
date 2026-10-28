@@ -27,3 +27,16 @@ func TestTransferEndpointRefusesAHostURIWithoutAHost(t *testing.T) {
 		require.ErrorIs(t, err, errInvalidConfig, hostURI)
 	}
 }
+
+func TestTransferEndpointsNameWhereEachProviderServes(t *testing.T) {
+	endpoints, err := parseTransferEndpoints([]string{"akash1aaa=localhost:38453", "akash1bbb=10.0.0.2:48453"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"akash1aaa": "localhost:38453", "akash1bbb": "10.0.0.2:48453"}, endpoints)
+}
+
+func TestTransferEndpointsRefuseWhatNamesNoEndpoint(t *testing.T) {
+	for _, pair := range []string{"akash1aaa", "=localhost:38453", "akash1aaa=localhost", "akash1aaa=:", "akash1aaa=:38453", "akash1aaa=localhost:"} {
+		_, err := parseTransferEndpoints([]string{pair})
+		require.ErrorIs(t, err, errInvalidConfig, pair)
+	}
+}

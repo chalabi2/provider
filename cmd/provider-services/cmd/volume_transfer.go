@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/viper"
 
@@ -110,15 +111,22 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 	volumes := replication.NewCRDVolumeSource(ac, kc, ns, buckets)
 	port := viper.GetInt(FlagVolumeTransferPort)
 
-	dial := func(ctx context.Context, source string) (vtv1.VolumeTransferClient, io.Closer, error) {
-		resp, err := cl.Query().Provider().Provider(ctx, &ptypes.QueryProviderRequest{Owner: source})
-		if err != nil {
-			return nil, nil, err
-		}
+	endpoints, err := parseTransferEndpoints(viper.GetStringSlice(FlagVolumeTransferEndpoints))
+	if err != nil {
+		return nil, err
+	}
 
-		endpoint, err := transferEndpoint(resp.Provider.HostURI, port)
-		if err != nil {
-			return nil, nil, err
+	dial := func(ctx context.Context, source string) (vtv1.VolumeTransferClient, io.Closer, error) {
+		endpoint, named := endpoints[source]
+		if !named {
+			resp, err := cl.Query().Provider().Provider(ctx, &ptypes.QueryProviderRequest{Owner: source})
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if endpoint, err = transferEndpoint(resp.Provider.HostURI, port); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		own, err := certs.GetMTLS(ctx)
@@ -157,6 +165,28 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 			Interval:  viper.GetDuration(FlagVolumeMigrationInterval),
 		}, logger),
 	}, nil
+}
+
+// parseTransferEndpoints reads provider=host:port pairs: where providers that
+// do not follow the host URI and transfer port convention serve transfers.
+// The source's certificate is still checked against the chain on every dial.
+func parseTransferEndpoints(pairs []string) (map[string]string, error) {
+	endpoints := make(map[string]string, len(pairs))
+
+	for _, pair := range pairs {
+		provider, endpoint, ok := strings.Cut(pair, "=")
+		if !ok || provider == "" {
+			return nil, fmt.Errorf("%w: --%s %q is not provider=host:port", errInvalidConfig, FlagVolumeTransferEndpoints, pair)
+		}
+
+		if host, port, err := net.SplitHostPort(endpoint); err != nil || host == "" || port == "" {
+			return nil, fmt.Errorf("%w: --%s %q is not provider=host:port", errInvalidConfig, FlagVolumeTransferEndpoints, pair)
+		}
+
+		endpoints[provider] = endpoint
+	}
+
+	return endpoints, nil
 }
 
 // transferEndpoint is where a provider serves volume transfers: the host of
