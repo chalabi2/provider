@@ -1,4 +1,4 @@
-// Package bucket serves AEP-87 bucket volumes: S3-compatible buckets the
+// Package bucket serves storage-market bucket volumes: S3-compatible buckets the
 // provider exposes over the network to holders of the owner's access keys.
 // A Backend maps one bucket onto an S3 server; RGW is the first.
 package bucket

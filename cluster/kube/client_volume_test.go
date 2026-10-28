@@ -454,7 +454,7 @@ func TestDeployedVolumesRebuild(t *testing.T) {
 	require.Equal(t, uint64(200), volumes[0].Group.Resources[0].Storage[0].Quantity.Value())
 }
 
-// TestTeardownLeaseLeavesVolumeObjects pins the AEP-87 invariant that
+// TestTeardownLeaseLeavesVolumeObjects pins the storage-market invariant that
 // TeardownLease is unchanged: it deletes the lease namespace (and manifest),
 // while Retain PVs and Volume CRDs survive for the storage operator to
 // re-park.

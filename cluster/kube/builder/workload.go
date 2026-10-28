@@ -320,7 +320,7 @@ func (b *Workload) volumes() []corev1.Volume {
 	return volumes
 }
 
-// volumeClaims returns pod volumes referencing pre-bound PVCs of AEP-87
+// volumeClaims returns pod volumes referencing pre-bound PVCs of
 // first-class volumes. The claim name is the deterministic volume object
 // name (volume-<sha256(owner/vid)[:12]>): the storage operator creates the
 // PVC in the lease namespace with spec.volumeName pinned to the volume's
@@ -359,7 +359,7 @@ func (b *Workload) volumeClaims() ([]corev1.Volume, error) {
 	return volumes, nil
 }
 
-// hasVolumeRefs reports whether the service attaches AEP-87 first-class
+// hasVolumeRefs reports whether the service attaches first-class
 // volumes. Such services render as a Deployment with replicas forced to 1:
 // v1 volumes are RWO and StatefulSet VolumeClaimTemplates' positional
 // per-replica claims do not apply to a shared pre-bound PVC.

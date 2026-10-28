@@ -22,12 +22,12 @@ import (
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 )
 
-// AEP-87 volume lifecycle. All verbs delegate to the Volume CRD - the
+// storage-market volume lifecycle. All verbs delegate to the Volume CRD - the
 // daemon records desired state, the storage operator owns the PV
 // choreography (provision/park/bind) and the GC. The daemon never touches
 // PersistentVolumes directly.
 
-// serviceHasVolumeRefs reports whether a manifest service attaches AEP-87
+// serviceHasVolumeRefs reports whether a manifest service attaches
 // first-class volumes - the third case of Deploy's persistent switch.
 func serviceHasVolumeRefs(service *mapi.Service) bool {
 	if service.Params == nil {

@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package integration: AEP-87 decoupled storage market provider e2e
+// Package integration: decoupled storage market provider e2e
 // (IMPLEMENTATION.md §8.2-§8.3), modeled on E2EPersistentStorageDefault.
 //
 // How to run (requires docker + kind on the host):
@@ -234,7 +234,7 @@ deployment:
       count: 1
 `
 
-// E2EStorageMarket drives the single-provider AEP-87 flows: the core
+// E2EStorageMarket drives the single-provider storage-market flows: the core
 // volume lifecycle and the escrow money path.
 type E2EStorageMarket struct {
 	IntegrationTestSuite

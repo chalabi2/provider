@@ -627,7 +627,7 @@ func (g bidGates) shouldBid(ctx context.Context, group *dtypes.Group) (bool, err
 		}
 	}
 
-	// AEP-87 attach pre-check: every volume reference must match a locally
+	// storage-market attach pre-check: every volume reference must match a locally
 	// Parked volume. Cheap local filter only — the chain gates attach bids
 	// to the colocated provider regardless, so no lookup wired means no
 	// filter.

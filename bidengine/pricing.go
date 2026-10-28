@@ -329,7 +329,7 @@ type storageElement struct {
 	Class string `json:"class"`
 	Size  uint64 `json:"size"`
 
-	// AEP-87 volume terms, set only for storage-only (volume) groups.
+	// storage-market volume terms, set only for storage-only (volume) groups.
 	// Volume marks the entry as a standalone volume; RetentionHours is the
 	// post-close retention window the provider must honor; MaxReplicas is
 	// the export duty priced into the primary lease; Replica marks the

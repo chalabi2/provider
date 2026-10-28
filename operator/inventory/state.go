@@ -26,7 +26,7 @@ func (s *clusterState) run() error {
 
 	// volumeOverlay holds the volumes driver's allocated-only entries; they
 	// are merged INTO the capacity drivers' classes rather than appended, so
-	// parked/retained AEP-87 volumes (whose PVs live on the non-sellable
+	// parked/retained storage-market volumes (whose PVs live on the non-sellable
 	// -retain class twin) count against the base class headroom.
 	var volumeOverlay inventory.ClusterStorage
 

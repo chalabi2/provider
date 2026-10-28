@@ -385,7 +385,7 @@ func (inv *inventory) tryAdjust(node int, res *rtypes.Resources, teeType ctypes.
 }
 
 func tryAdjustCPU(rp *inventoryV1.CPU, res *rtypes.CPU) bool {
-	// a unit that requests no CPU, as an AEP-87 volume group's does, is placed
+	// a unit that requests no CPU, as a storage-market volume group's does, is placed
 	// on no CPU, so it has no architecture to match
 	if res.Units.Value() == 0 {
 		return true

@@ -85,7 +85,7 @@ func Cmd() *cobra.Command {
 			}
 			storage = append(storage, st)
 
-			// AEP-87 volume allocations: an allocated-only overlay the
+			// storage-market volume allocations: an allocated-only overlay the
 			// cluster state merges into the base storage classes
 			if st, err = NewVolumes(ctx); err != nil {
 				return err

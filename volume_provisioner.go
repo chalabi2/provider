@@ -15,7 +15,7 @@ import (
 	"github.com/akash-network/provider/session"
 )
 
-// volumeProvisioner consumes the AEP-87 win handoff. A storage-only (volume)
+// volumeProvisioner consumes the storage-market win handoff. A storage-only (volume)
 // lease has no manifest — the on-chain GroupSpec is the whole contract — so
 // the bid engine publishes event.VolumeLeaseWon instead of event.LeaseWon and
 // this service picks it up.

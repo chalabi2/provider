@@ -28,7 +28,7 @@ import (
 func Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "storage",
-		Short:        "kubernetes operator managing AEP-87 first-class volumes",
+		Short:        "kubernetes operator managing first-class volumes",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()

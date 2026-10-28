@@ -33,7 +33,7 @@ import (
 	"github.com/akash-network/provider/tools/fromctx"
 )
 
-// volumeTransfer is the AEP-87 volume data plane of a provider: the
+// volumeTransfer is the storage-market volume data plane of a provider: the
 // VolumeTransfer server other providers copy volumes out of, and the
 // migrations that copy in the volumes moved here.
 type volumeTransfer struct {

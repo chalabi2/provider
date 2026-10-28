@@ -38,7 +38,7 @@ type ChainClient interface {
 	// group, which a lease resize may have grown.
 	VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, error)
 
-	// Events streams the AEP-87 relevant chain events: EventLeaseClosed,
+	// Events streams the storage market's chain events: EventLeaseClosed,
 	// EventLeaseReclaimStarted, EventLeaseResized, EventVolumeAttached,
 	// EventVolumeDetached, EventVolumeAdopted.
 	Events(ctx context.Context, name string) (<-chan interface{}, error)
@@ -129,7 +129,7 @@ func (c *chainClient) VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, e
 
 // Events subscribes to new-block headers and decodes the volume-relevant
 // typed events out of each block's results. chain-sdk's util/events service
-// does not forward the AEP-87 volume events yet, so the operator runs its
+// does not forward the storage-market volume events yet, so the operator runs its
 // own narrow pump off the same primitives.
 func (c *chainClient) Events(ctx context.Context, name string) (<-chan interface{}, error) {
 	ebus, valid := c.node.(cmclient.EventsClient)

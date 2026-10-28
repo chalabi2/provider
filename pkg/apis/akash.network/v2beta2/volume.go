@@ -18,7 +18,7 @@ import (
 )
 
 // VolumePhase is the storage-operator reconciliation state of a Volume
-// (AEP-87, DESIGN §3.3). All state is re-derivable from CRDs + PVs + chain
+// (storage market DESIGN §3.3). All state is re-derivable from CRDs + PVs + chain
 // queries; the phase is the operator's record of where in the lifecycle the
 // backing PV currently is.
 type VolumePhase string
@@ -46,7 +46,7 @@ const (
 
 const volumeNameHashLen = 12
 
-// Volume is the provider's durable record of an AEP-87 first-class volume:
+// Volume is the provider's durable record of a first-class volume:
 // the restart-survival record and the GC ledger. The cluster client writes
 // the spec (desired state from chain events); the storage operator owns the
 // PV choreography and the status.

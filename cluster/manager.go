@@ -503,7 +503,7 @@ func (dm *deploymentManager) doDeploy(pctx context.Context) ([]string, []string,
 	// Don't use a context tied to the lifecycle, as we don't want to cancel Kubernetes operations
 	deployCtx := fromctx.ApplyToContext(context.Background(), dm.config.ClusterSettings)
 
-	// attach AEP-87 volumes before the workload lands: marking the Volume
+	// attach storage-market volumes before the workload lands: marking the Volume
 	// CRD Attached is what triggers the storage operator's claimRef
 	// choreography (target PVC in the lease namespace), and the pod cannot
 	// schedule until that PVC exists. The daemon drives this directly —
@@ -667,7 +667,7 @@ func (dm *deploymentManager) doTeardown(ctx context.Context) error {
 	}()
 
 	go func() {
-		// detach AEP-87 volumes so the storage operator re-parks the Retain
+		// detach storage-market volumes so the storage operator re-parks the Retain
 		// PV: symmetric to the attach the deploy path drives. Missing CRDs
 		// are tolerated (DetachVolume treats not-found as done).
 		result := retry.Do(func() error {

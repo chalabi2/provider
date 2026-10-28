@@ -89,7 +89,7 @@ type ManifestStorageParams struct {
 	Mount    string `json:"mount"    yaml:"mount"`
 	ReadOnly bool   `json:"readOnly" yaml:"readOnly"`
 	// Volume mirrors the on-chain VolumeRef as "owner/dseq/gseq/name" for
-	// AEP-87 first-class volume attachments; empty for locally-provisioned
+	// first-class volume attachments; empty for locally-provisioned
 	// (per-lease) storage.
 	Volume string `json:"volume,omitempty" yaml:"volume,omitempty"`
 }

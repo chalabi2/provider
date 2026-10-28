@@ -222,7 +222,7 @@ func newDataForScript(r Request) dataForScript {
 		storageQuantity := parseStorage(group.Storage)
 		endpointQuantity := len(group.Endpoints)
 
-		// AEP-87: a storage-only (volume) group prices its volume terms —
+		// Storage market: a storage-only (volume) group prices its volume terms —
 		// retention, replication duty — alongside class and size
 		if vol := r.GSpec.Volume; vol != nil {
 			for j := range storageQuantity {

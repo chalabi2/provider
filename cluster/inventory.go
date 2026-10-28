@@ -45,7 +45,7 @@ var (
 	// ErrReservationNotFound reports that no reservation is held for the order.
 	ErrReservationNotFound = errors.New("reservation not found")
 	// errReservationDurable reports an unreserve that was declined because
-	// the reservation is durable (AEP-87 volume) and allocated: the leased
+	// the reservation is durable (storage-market volume) and allocated: the leased
 	// bytes outlive the lease and are released only on volume GC.
 	errReservationDurable       = errors.New("reservation is durable; released only on volume GC")
 	errInventoryNotAvailableYet = errors.New("inventory status not available yet")
@@ -178,7 +178,7 @@ func newInventoryService(
 		reservations = append(reservations, res)
 	}
 
-	// AEP-87: durable (volume) reservations are rebuilt from Volume CRDs.
+	// Storage market: durable (volume) reservations are rebuilt from Volume CRDs.
 	// They are marked allocated: their PVs already exist and are counted as
 	// allocated by the inventory operator's cluster state, so they must not
 	// be re-adjusted against reported capacity like pending reservations.
@@ -366,7 +366,7 @@ func (is *inventoryService) statusV1(ctx context.Context) (*provider.Inventory, 
 }
 
 func (is *inventoryService) resourcesToCommit(rgroup dtypes.ResourceGroup) dtypes.ResourceGroup {
-	// AEP-87: a volume group's bid offer must EQUAL the order's storage
+	// Storage market: a volume group's bid offer must EQUAL the order's storage
 	// quantity (the chain rejects anything else) and its zero compute legs
 	// must stay zero (ComputeCommittedResources clamps zero to one under
 	// overcommit), so commit levels do not apply — durable leased bytes are
@@ -976,7 +976,7 @@ loop:
 					continue
 				}
 
-				// AEP-87: an allocated durable (volume) reservation is
+				// Storage market: an allocated durable (volume) reservation is
 				// exempt from unreserve-on-lease-close - the provider
 				// holds the bytes through retention/adoption and the
 				// capacity is released only on volume GC. A pending

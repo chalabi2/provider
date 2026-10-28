@@ -21,7 +21,7 @@ const (
 	// querier execs into.
 	rbdToolsApp = "rook-ceph-tools"
 
-	// rbdSnapPrefix namespaces AEP-87 snapshots so the driver never
+	// rbdSnapPrefix namespaces storage-market snapshots so the driver never
 	// touches snapshots created by CSI or an operator for other purposes.
 	rbdSnapPrefix = "akash-xfer-"
 )

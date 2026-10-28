@@ -91,7 +91,7 @@ type IntegrationTestSuite struct {
 
 	ipMarketplace bool
 
-	// storageMarket wires the suite for AEP-87 volume flows: volume-enabled
+	// storageMarket wires the suite for storage-market volume flows: volume-enabled
 	// genesis params, an in-process storage operator, and a provider bidding
 	// on beta3 volume orders.
 	storageMarket bool
@@ -156,7 +156,7 @@ func (s *IntegrationTestSuite) SetupSuite() {
 			res = cdc.MustMarshalJSON(state)
 		case "market":
 			if s.storageMarket {
-				// AEP-87 e2e posture: the volume market ships behind a
+				// storage-market e2e posture: the volume market ships behind a
 				// governance flag, and the production reclamation floor is
 				// 24h wall clock - both must move for the suite to drive a
 				// full reclaim in test time.

@@ -12,7 +12,7 @@ nodes:
     extraPortMappings:
       - containerPort: 80
         protocol: TCP
-    # AEP-87 two-provider e2e: local-path PV data must resolve to the SAME
+    # storage-market two-provider e2e: local-path PV data must resolve to the SAME
     # absolute path on the host and inside the node, so the in-process
     # replication file driver can read source PVs and land imports in
     # destination PVs. setup-kind.sh repoints the local-path provisioner

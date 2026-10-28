@@ -18,7 +18,7 @@ const (
 )
 
 // TestDeploymentVolumeAttach covers the third render case: a service
-// referencing an AEP-87 first-class volume becomes a k8s Deployment whose
+// referencing a first-class volume becomes a k8s Deployment whose
 // pod mounts the volume through the deterministic pre-bound claim name.
 func TestDeploymentVolumeAttach(t *testing.T) {
 	lid := testutil.LeaseID(t)

@@ -16,7 +16,7 @@ metadata:
     name: lease
     akash.network: "true"
 ---
-# akash-volumes parks the holder PVCs of AEP-87 first-class volumes: the
+# akash-volumes parks the holder PVCs of first-class volumes: the
 # storage operator keeps every parked Retain PV claimed from here so the
 # kube binder can never hand it to an arbitrary pending PVC.
 apiVersion: v1

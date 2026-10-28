@@ -28,7 +28,7 @@ install_crd() {
     kubectl apply -f "$rootdir/_docs/kustomize/storage/storageclass.yaml"
     kubectl patch node "${KIND_NAME}-control-plane" -p '{"metadata":{"labels":{"akash.network/storageclasses":"beta2.default.beta3"}}}'
 
-    # AEP-87 two-provider e2e: the in-process replication file driver reads
+    # storage-market two-provider e2e: the in-process replication file driver reads
     # and writes local-path PV host paths directly, so the provisioner's
     # storage directory must resolve to the SAME absolute path on the host
     # and inside the kind node. kind-config.yaml mounts the host dir at that

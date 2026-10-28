@@ -23,7 +23,7 @@ func storageEntry(class string, capacity, allocated int64) inventory.Storage {
 	}
 }
 
-// TestClusterStateVolumeOverlay pins the AEP-87 inventory leg: the volumes
+// TestClusterStateVolumeOverlay pins the storage-market inventory leg: the volumes
 // driver's allocated-only entries merge INTO the capacity drivers' classes
 // (never appended as duplicates), so parked/retained volumes count against
 // base-class headroom, and re-publishes do not accumulate.

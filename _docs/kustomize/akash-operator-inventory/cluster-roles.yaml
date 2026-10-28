@@ -90,7 +90,7 @@ rules:
       - get
       - list
       - watch
-  # AEP-87: the volumes scraper overlays first-class volume allocations
+  # Storage market: the volumes scraper overlays first-class volume allocations
   # onto the merged cluster state so parked/retained volumes are never
   # double-counted as free.
   - apiGroups:

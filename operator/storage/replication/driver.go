@@ -1,4 +1,4 @@
-// Package replication is the AEP-87 volume data plane (DESIGN.md §9,
+// Package replication is the storage-market volume data plane (DESIGN.md §9,
 // IMPLEMENTATION.md §5.5): the ReplicationDriver seam between the
 // VolumeTransfer wire protocol and the storage backend, the chunked,
 // resumable, per-chunk-sha256 export framing, and the migration/replica

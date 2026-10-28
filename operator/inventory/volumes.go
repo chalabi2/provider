@@ -17,7 +17,7 @@ import (
 	"github.com/akash-network/provider/tools/fromctx"
 )
 
-// driverVolumes publishes AEP-87 first-class volume allocations. Unlike the
+// driverVolumes publishes first-class volume allocations. Unlike the
 // capacity drivers (ceph, rancher) its entries carry allocated bytes only;
 // the cluster-state merge overlays them onto the matching base class so
 // parked and retained volumes are never double-counted as free after their

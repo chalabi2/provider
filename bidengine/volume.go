@@ -12,7 +12,7 @@ import (
 )
 
 // VolumeConfig holds the provider caps for bidding on storage-only (volume)
-// orders (AEP-87). Volume bidding is enabled per storage class: a class is
+// orders (decoupled storage market). Volume bidding is enabled per storage class: a class is
 // eligible only when listed in Classes, which asserts the matching -retain
 // StorageClass is installed in the cluster (the storage operator installs
 // them). An empty Classes list disables volume bidding entirely.

@@ -67,7 +67,7 @@ type serverOptions struct {
 	volumeTransfer vtv1.VolumeTransferServer
 }
 
-// WithVolumeTransfer registers the AEP-87 VolumeTransfer data plane on
+// WithVolumeTransfer registers the storage-market VolumeTransfer data plane on
 // the gateway (mTLS with x/cert provider identities; the service derives
 // authorization from chain state). Nil is ignored - providers not in the
 // volume market serve no transfer endpoint.

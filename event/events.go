@@ -16,7 +16,7 @@ type LeaseWon struct {
 }
 
 // VolumeLeaseWon is published when a lease on a storage-only (volume) group
-// is won (AEP-87). A volume lease has no manifest — the on-chain GroupSpec is
+// is won (decoupled storage market). A volume lease has no manifest — the on-chain GroupSpec is
 // the whole contract — so it is handed to the volume provisioner rather than
 // the manifest machinery.
 type VolumeLeaseWon struct {

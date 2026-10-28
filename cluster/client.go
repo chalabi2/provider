@@ -67,7 +67,7 @@ type Client interface {
 	TeardownLease(context.Context, mtypes.LeaseID) error
 	Deployments(context.Context) ([]ctypes.IDeployment, error)
 
-	// DeployVolume records a won AEP-87 volume lease as a Volume CRD. The
+	// DeployVolume records a won storage-market volume lease as a Volume CRD. The
 	// storage operator owns the PV choreography; the daemon never touches
 	// PVs directly.
 	DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dvbeta.Group) error

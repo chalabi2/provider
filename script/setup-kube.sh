@@ -148,7 +148,7 @@ install_crd() {
     kubectl apply -f "$CRD_FILE"
     kubectl apply -f "$rootdir/_docs/kustomize/storage/storageclass.yaml"
 
-    # AEP-87 two-provider e2e (kind only): repoint the local-path
+    # storage-market two-provider e2e (kind only): repoint the local-path
     # provisioner at the host-mounted storage directory so PV host paths
     # resolve identically on the host and inside the node. The mount is
     # declared in _run/kube/kind-config.yaml.

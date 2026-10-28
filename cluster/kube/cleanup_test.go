@@ -296,7 +296,7 @@ func TestCleanupStaleResourcesIntegration(t *testing.T) {
 	require.Len(t, roleBindings.Items, 0)
 }
 
-// TestCleanupStaleResourcesExcludesVolumeComponent pins the AEP-87
+// TestCleanupStaleResourcesExcludesVolumeComponent pins the storage market
 // invariant that objects labeled akash.network/component=volume never match
 // the stale-resource selector, even when they don't correspond to any
 // manifest service.

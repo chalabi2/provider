@@ -21,7 +21,7 @@ const (
 	// ReservationKindLease is the ordinary compute reservation: released
 	// when its lease closes.
 	ReservationKindLease ReservationKind = iota
-	// ReservationKindDurable is an AEP-87 volume reservation: the leased
+	// ReservationKindDurable is a storage-market volume reservation: the leased
 	// bytes outlive the lease (retention window, adoption), so it is exempt
 	// from unreserve-on-lease-close and released only when the volume is
 	// garbage-collected. Rebuilt from Volume CRDs on restart.

@@ -32,7 +32,7 @@ import (
 
 const volumeGroupNameForTest = "volume-group"
 
-// makeVolumeGroupForTest builds an AEP-87 storage-only GroupSpec: typed
+// makeVolumeGroupForTest builds a storage-market storage-only GroupSpec: typed
 // VolumePolicy, present-but-zero compute legs, exactly one storage entry.
 func makeVolumeGroupForTest(size uint64) dvbeta.GroupSpec {
 	return dvbeta.GroupSpec{
@@ -134,7 +134,7 @@ func waitForActiveReservations(t *testing.T, inv *inventoryService, count int) {
 	}
 }
 
-// TestInventory_DurableReservationLifecycle covers the AEP-87 accounting
+// TestInventory_DurableReservationLifecycle covers the storage-market accounting
 // rules end to end: exact (uncommitted) storage quantities, the bid-loss
 // unreserve path, and the exemption from unreserve-on-lease-close once the
 // volume is provisioned.

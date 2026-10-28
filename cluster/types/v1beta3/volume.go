@@ -5,7 +5,7 @@ import (
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
 
-// VolumeDeployment is a deployed AEP-87 first-class volume as reported by
+// VolumeDeployment is a deployed first-class volume as reported by
 // the cluster: the volume's own (storage) lease plus the storage-only
 // GroupSpec reconstructed from the Volume CRD. It is the restart rebuild
 // source for durable reservations.

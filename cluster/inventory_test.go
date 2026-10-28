@@ -889,7 +889,7 @@ func TestPlacementRequirementsPreserved(t *testing.T) {
 	})
 }
 
-// TestInventory_ResourcesToCommitVolumeGroup asserts the AEP-87 carve-out:
+// TestInventory_ResourcesToCommitVolumeGroup asserts the storage-market carve-out:
 // a storage-only (volume) group is never commit-level adjusted. The chain
 // requires the bid offer to EQUAL the order's storage quantity, and
 // ComputeCommittedResources would clamp the zero compute legs to one under

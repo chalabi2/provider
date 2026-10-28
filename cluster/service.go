@@ -129,7 +129,7 @@ func NewService(
 		return nil, err
 	}
 
-	// AEP-87: durable (volume) reservations are rebuilt from Volume CRDs,
+	// Storage market: durable (volume) reservations are rebuilt from Volume CRDs,
 	// not from Manifest CRDs - a volume lease has no manifest.
 	volumes, err := client.DeployedVolumes(ctx)
 	if err != nil {
@@ -504,7 +504,7 @@ func (s *service) teardownLease(lid mtypes.LeaseID) {
 		err := s.inventory.unreserve(lid.OrderID())
 		switch {
 		case errors.Is(err, errReservationDurable):
-			// AEP-87 volume lease close: the durable reservation stays -
+			// storage-market volume lease close: the durable reservation stays -
 			// the provider holds the bytes through retention/adoption and
 			// releases the capacity only on volume GC.
 			s.log.Info("durable volume reservation retained through lease close", "lid", lid)

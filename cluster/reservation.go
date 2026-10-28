@@ -10,7 +10,7 @@ import (
 	"github.com/akash-network/provider/cluster/util"
 )
 
-// groupVolumePolicy extracts the AEP-87 volume policy when the resource
+// groupVolumePolicy extracts the storage-market volume policy when the resource
 // group is a storage-only (volume) group; nil for compute groups and shapes
 // that carry no GroupSpec.
 func groupVolumePolicy(rgroup dtypes.ResourceGroup) *dv1.VolumePolicy {

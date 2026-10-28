@@ -170,7 +170,7 @@ const (
 )
 
 // attrStorageVolumes is the capability a provider advertises to take part
-// in the AEP-87 volume market; the SDL injects the same key into volume
+// in the volume market; the SDL injects the same key into volume
 // order placement requirements.
 const attrStorageVolumes = "capabilities/storage/volumes"
 
@@ -1113,7 +1113,7 @@ func attestationSidecarEnv(logCfg logging.Config, mock bool) []corev1.EnvVar {
 	return env
 }
 
-// volumesEnabled reports whether the provider participates in the AEP-87
+// volumesEnabled reports whether the provider participates in the
 // volume market: either the capability is advertised in its attributes or
 // volume classes are configured for bidding.
 func volumesEnabled(config provider.Config) bool {

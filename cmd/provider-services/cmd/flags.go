@@ -202,7 +202,7 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
-	cmd.Flags().StringSlice(FlagVolumeClasses, nil, "storage classes offered as standalone volumes (AEP-87); requires the matching -retain StorageClass installed by the storage operator. empty disables volume bidding")
+	cmd.Flags().StringSlice(FlagVolumeClasses, nil, "storage classes offered as standalone volumes (decoupled storage market); requires the matching -retain StorageClass installed by the storage operator. empty disables volume bidding")
 	if err := viper.BindPFlag(FlagVolumeClasses, cmd.Flags().Lookup(FlagVolumeClasses)); err != nil {
 		return err
 	}
