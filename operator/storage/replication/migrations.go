@@ -17,6 +17,7 @@ import (
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	vtv1 "pkg.akt.dev/go/volume/v1"
 
+	"github.com/akash-network/provider/bucket"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	akashclientset "github.com/akash-network/provider/pkg/client/clientset/versioned"
 )
@@ -50,6 +51,9 @@ type MigrationsConfig struct {
 	Source VolumeSource
 	// Driver applies what is pulled.
 	Driver Driver
+	// Buckets receives the objects of the buckets moved here; nil on a
+	// provider that serves none.
+	Buckets bucket.Backend
 	// Dial connects to a source provider's VolumeTransfer endpoint.
 	Dial func(ctx context.Context, source string) (vtv1.VolumeTransferClient, io.Closer, error)
 	// Evict starts a volume_evict reclamation of a lease whose copy cannot
@@ -217,11 +221,6 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 		return nil
 	}
 
-	info, err := m.cfg.Source.Resolve(ctx, vol.Spec.Owner, vol.Spec.VID)
-	if err != nil {
-		return err
-	}
-
 	maxBytes, err := transferBound(vol.Spec.Size)
 	if err != nil {
 		return err
@@ -229,7 +228,17 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 
 	logger := m.log.With("volume", vol.Name, "lid", lid)
 
-	syncers := make(map[string]*Syncer)
+	var copier func(client vtv1.VolumeTransferClient) syncRound
+
+	if vol.IsBucket() {
+		if copier, err = m.bucketCopier(vol, lid.DSeq, maxBytes, logger); err != nil {
+			return err
+		}
+	} else if copier, err = m.imageCopier(ctx, vol, lid.DSeq, maxBytes, logger); err != nil {
+		return err
+	}
+
+	rounds := make(map[string]syncRound)
 
 	var closers []io.Closer
 
@@ -239,9 +248,9 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 		}
 	}()
 
-	syncer := func(ctx context.Context, source string) (*Syncer, error) {
-		if s := syncers[source]; s != nil {
-			return s, nil
+	round := func(ctx context.Context, source string) (syncRound, error) {
+		if r := rounds[source]; r != nil {
+			return r, nil
 		}
 
 		if err := AuthorizeImport(ctx, m.cfg.Chain, vol.Spec.Owner, vol.Spec.VID, source, false); err != nil {
@@ -255,41 +264,25 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 
 		closers = append(closers, closer)
 
-		s := &Syncer{
-			Client:    client,
-			Driver:    m.cfg.Driver,
-			Ref:       info.Ref,
-			Owner:     vol.Spec.Owner,
-			Vid:       vol.Spec.VID,
-			DSeq:      lid.DSeq,
-			Requester: m.cfg.Self,
-			SpoolDir:  m.cfg.SpoolDir,
-			MaxBytes:  maxBytes,
-		}
-		syncers[source] = s
+		r := copier(client)
+		rounds[source] = r
 
-		return s, nil
+		return r, nil
 	}
 
 	sources := MigrationSources(leases, vol.Spec.VID, lid.DSeq, m.cfg.Self, vol.Status.LocalCopy)
 
-	logger.Info("volume migration started", "sources", sources, "local_copy", vol.Status.LocalCopy)
+	logger.Info("volume migration started", "sources", sources, "local_copy", vol.Status.LocalCopy, "bucket", vol.IsBucket())
 
 	return RunMigration(ctx, MigrationDeps{
 		Sources: sources,
 		Sync: func(ctx context.Context, source string) (bool, error) {
-			s, err := syncer(ctx, source)
+			r, err := round(ctx, source)
 			if err != nil {
 				return false, err
 			}
 
-			if applied, err := s.SyncOnce(ctx); err != nil {
-				return false, err
-			} else if applied != "" {
-				logger.Info("volume snapshot landed", "source", source, "snapshot", applied, "final", s.Final())
-			}
-
-			return s.Final(), nil
+			return r(ctx, source)
 		},
 		Park: func(ctx context.Context) error {
 			return m.park(ctx, vol.Name, lid)
@@ -301,6 +294,83 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 		Interval:    m.cfg.Interval,
 		MaxFailures: m.cfg.MaxFailures,
 	}, logger)
+}
+
+// syncRound runs one round of a migration against the source it was made
+// for, and reports whether the copy here is whole.
+type syncRound func(ctx context.Context, source string) (bool, error)
+
+// imageCopier pulls a mounted volume's image through the driver.
+func (m *Migrations) imageCopier(ctx context.Context, vol *crd.Volume, dseq, maxBytes uint64, logger log.Logger) (func(vtv1.VolumeTransferClient) syncRound, error) {
+	info, err := m.cfg.Source.Resolve(ctx, vol.Spec.Owner, vol.Spec.VID)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(client vtv1.VolumeTransferClient) syncRound {
+		s := &Syncer{
+			Client:    client,
+			Driver:    m.cfg.Driver,
+			Ref:       info.Ref,
+			Owner:     vol.Spec.Owner,
+			Vid:       vol.Spec.VID,
+			DSeq:      dseq,
+			Requester: m.cfg.Self,
+			SpoolDir:  m.cfg.SpoolDir,
+			MaxBytes:  maxBytes,
+		}
+
+		return func(ctx context.Context, source string) (bool, error) {
+			if applied, err := s.SyncOnce(ctx); err != nil {
+				return false, err
+			} else if applied != "" {
+				logger.Info("volume snapshot landed", "source", source, "snapshot", applied, "final", s.Final())
+			}
+
+			return s.Final(), nil
+		}
+	}, nil
+}
+
+// bucketCopier copies a bucket's objects into the bucket here.
+func (m *Migrations) bucketCopier(vol *crd.Volume, dseq, maxBytes uint64, logger log.Logger) (func(vtv1.VolumeTransferClient) syncRound, error) {
+	if m.cfg.Buckets == nil {
+		return nil, fmt.Errorf("%w: bucket %s moved here, but this provider serves no buckets", ErrReplication, vol.Name)
+	}
+
+	ref := bucket.RefFor(vol.Name, vol.Spec.Owner, vol.Spec.VID)
+
+	return func(client vtv1.VolumeTransferClient) syncRound {
+		s := &BucketSyncer{
+			Client: client,
+			Open: func(ctx context.Context) (bucket.Objects, error) {
+				return m.cfg.Buckets.Objects(ctx, ref)
+			},
+			Owner:     vol.Spec.Owner,
+			Vid:       vol.Spec.VID,
+			DSeq:      dseq,
+			Requester: m.cfg.Self,
+			SpoolDir:  m.cfg.SpoolDir,
+			MaxBytes:  maxBytes,
+		}
+
+		return func(ctx context.Context, source string) (bool, error) {
+			complete, err := s.SyncOnce(ctx)
+			if err != nil {
+				if s.Objects() > 0 {
+					logger.Info("bucket objects landing", "source", source, "objects", s.Objects(), "bytes", s.Bytes())
+				}
+
+				return false, err
+			}
+
+			if complete {
+				logger.Info("bucket objects landed", "source", source, "objects", s.Objects(), "bytes", s.Bytes())
+			}
+
+			return complete, nil
+		}
+	}, nil
 }
 
 // park records the copy as whole: the volume is Provisioned, and nothing

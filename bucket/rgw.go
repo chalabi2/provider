@@ -30,6 +30,13 @@ type rgw struct {
 	endpoint string
 	region   string
 	http     *http.Client
+	// data moves object content, which takes as long as the object needs
+	data *http.Client
+
+	// objects above multipartAbove bytes are written in parts of at least
+	// partSize
+	multipartAbove int64
+	partSize       int64
 }
 
 const (
@@ -47,7 +54,20 @@ func newRGW(c Config) (Backend, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 	}
 
-	return &rgw{api: api, endpoint: endpoint, region: c.Region, http: client}, nil
+	// an object stored compressed moves as stored, never inflated in transit
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 2 * time.Minute
+	transport.DisableCompression = true
+
+	return &rgw{
+		api:            api,
+		endpoint:       endpoint,
+		region:         c.Region,
+		http:           client,
+		data:           &http.Client{Transport: transport},
+		multipartAbove: defaultMultipartAbove,
+		partSize:       defaultPartSize,
+	}, nil
 }
 
 func (b *rgw) Ensure(ctx context.Context, spec Spec) error {
@@ -122,21 +142,31 @@ func (b *rgw) setMaxBuckets(ctx context.Context, uid string, n int) error {
 // ever holds and which is dropped when fn returns, so the provider keeps no
 // key to the tenant's data.
 func (b *rgw) asOwner(ctx context.Context, user admin.User, fn func(s3Signer) error) error {
+	signer, err := b.ownerSigner(ctx, user)
+	if err != nil {
+		return err
+	}
+
+	err = fn(signer)
+
+	return errors.Join(err, b.dropOwnerKeys(ctx, user.ID))
+}
+
+// ownerSigner signs as the user itself, with a key the caller must drop.
+func (b *rgw) ownerSigner(ctx context.Context, user admin.User) (s3Signer, error) {
 	key, ok := ownerKey(user)
 	if !ok {
 		generate := true
 		keys, err := b.api.CreateKey(ctx, admin.UserKeySpec{UID: user.ID, KeyType: rgwKeyTypeS3, GenerateKey: &generate})
 		if err != nil {
-			return fmt.Errorf("owner key of %s: %w", user.ID, err)
+			return s3Signer{}, fmt.Errorf("owner key of %s: %w", user.ID, err)
 		}
 		if key, ok = ownerKey(admin.User{ID: user.ID, Keys: *keys}); !ok {
-			return fmt.Errorf("owner key of %s was not created", user.ID)
+			return s3Signer{}, fmt.Errorf("owner key of %s was not created", user.ID)
 		}
 	}
 
-	err := fn(s3Signer{creds: aws.Credentials{AccessKeyID: key.AccessKey, SecretAccessKey: key.SecretKey}, region: b.region})
-
-	return errors.Join(err, b.dropOwnerKeys(ctx, user.ID))
+	return s3Signer{creds: aws.Credentials{AccessKeyID: key.AccessKey, SecretAccessKey: key.SecretKey}, region: b.region}, nil
 }
 
 func (b *rgw) createBucket(ctx context.Context, owner s3Signer, bucket string) error {
@@ -192,6 +222,16 @@ type s3Signer struct {
 	region string
 }
 
+// sign signs req for S3, whose canonical path is the request's path as
+// sent: S3 does not escape it a second time.
+func (s s3Signer) sign(ctx context.Context, req *http.Request, payloadHash string) error {
+	signer := v4.NewSigner(func(o *v4.SignerOptions) {
+		o.DisableURIPathEscaping = true
+	})
+
+	return signer.SignHTTP(ctx, s.creds, req, payloadHash, "s3", s.region, time.Now())
+}
+
 // s3 makes a path-style S3 request to the in-cluster endpoint.
 func (b *rgw) s3(ctx context.Context, signer s3Signer, method, bucket, query string, body []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, b.endpoint+"/"+bucket+query, bytes.NewReader(body))
@@ -207,7 +247,7 @@ func (b *rgw) s3(ctx context.Context, signer s3Signer, method, bucket, query str
 		req.Header.Set("Content-MD5", base64.StdEncoding.EncodeToString(md[:]))
 	}
 
-	if err := v4.NewSigner().SignHTTP(ctx, signer.creds, req, hash, "s3", signer.region, time.Now()); err != nil {
+	if err := signer.sign(ctx, req, hash); err != nil {
 		return 0, nil, err
 	}
 
@@ -273,13 +313,36 @@ func (b *rgw) Resume(ctx context.Context, ref Ref) error {
 		return err
 	}
 
+	if err := b.revokeKeys(ctx, user); err != nil {
+		return err
+	}
+
+	return b.setSuspended(ctx, ref.UserID, 0)
+}
+
+// Seal leaves the user only the keys the provider makes for itself and
+// drops, which it reads the bucket with as it moves. It never drops those:
+// the operator seals a moving bucket on every pass, while a move may be
+// reading it.
+func (b *rgw) Seal(ctx context.Context, ref Ref) error {
+	user, err := b.user(ctx, ref)
+	if err != nil {
+		return err
+	}
+
+	return b.revokeKeys(ctx, user)
+}
+
+// revokeKeys removes every sub-user, so every tenant key with it.
+func (b *rgw) revokeKeys(ctx context.Context, user admin.User) error {
 	for _, sub := range user.Subusers {
-		if err := b.removeSubuser(ctx, ref.UserID, subuserName(ref.UserID, sub.Name)); err != nil {
+		err := b.removeSubuser(ctx, user.ID, subuserName(user.ID, sub.Name))
+		if err != nil && !errors.Is(err, ErrKeyNotFound) {
 			return err
 		}
 	}
 
-	return b.setSuspended(ctx, ref.UserID, 0)
+	return nil
 }
 
 func (b *rgw) setSuspended(ctx context.Context, uid string, suspended int) error {

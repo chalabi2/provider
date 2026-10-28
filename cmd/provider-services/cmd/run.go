@@ -881,9 +881,10 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	var gwgrpcOpts []gwgrpc.ServerOption
 
 	// the VolumeTransfer data plane is served only by volume-market
-	// participants; everyone else exposes no transfer endpoint
-	if volumesEnabled(config) {
-		transfer, err := buildVolumeTransfer(ctx, cl, accQuerier, cctx.FromAddress.String(), logger)
+	// participants, buckets included; everyone else exposes no transfer
+	// endpoint
+	if volumesEnabled(config) || buckets != nil {
+		transfer, err := buildVolumeTransfer(ctx, cl, accQuerier, cctx.FromAddress.String(), buckets, logger)
 		if err != nil {
 			return err
 		}

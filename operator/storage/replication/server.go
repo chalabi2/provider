@@ -18,6 +18,8 @@ import (
 
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	vtv1 "pkg.akt.dev/go/volume/v1"
+
+	"github.com/akash-network/provider/bucket"
 )
 
 // VolumeInfo is what the transfer server needs to know about a local
@@ -34,8 +36,11 @@ type VolumeInfo struct {
 	// arriving: it holds nothing anyone may take.
 	Incomplete bool
 	// Quiesced reports that no workload has the volume mounted, so nothing
-	// can write to it.
+	// can write to it. For a bucket: that no key can.
 	Quiesced bool
+	// Bucket reports an S3 bucket, whose objects move with ExportObjects
+	// rather than as an image.
+	Bucket bool
 }
 
 // ReasonImportIncomplete is the ErrorInfo reason of a refusal from a
@@ -45,10 +50,23 @@ const ReasonImportIncomplete = "VOLUME_IMPORT_INCOMPLETE"
 
 const errorDomain = "akash.network"
 
-func importIncompleteError(owner, vid string) error {
-	st := status.New(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s never finished arriving here", owner, vid))
+// ReasonNotFinal is the ErrorInfo reason of a refusal to export a bucket
+// that can still change: its lease here has not closed, or a key can still
+// write to it. A destination asks again later.
+const ReasonNotFinal = "VOLUME_NOT_FINAL"
 
-	detailed, err := st.WithDetails(&errdetails.ErrorInfo{Reason: ReasonImportIncomplete, Domain: errorDomain})
+func importIncompleteError(owner, vid string) error {
+	return reasonError(fmt.Sprintf("volume %s/%s never finished arriving here", owner, vid), ReasonImportIncomplete)
+}
+
+func notFinalError(owner, vid string) error {
+	return reasonError(fmt.Sprintf("bucket %s/%s can still change", owner, vid), ReasonNotFinal)
+}
+
+func reasonError(msg, reason string) error {
+	st := status.New(codes.FailedPrecondition, msg)
+
+	detailed, err := st.WithDetails(&errdetails.ErrorInfo{Reason: reason, Domain: errorDomain})
 	if err != nil {
 		return st.Err()
 	}
@@ -59,13 +77,23 @@ func importIncompleteError(owner, vid string) error {
 // IsImportIncomplete reports whether err is a source's refusal of a volume
 // it never finished importing.
 func IsImportIncomplete(err error) bool {
+	return hasReason(err, ReasonImportIncomplete)
+}
+
+// IsNotFinal reports whether err is a source's refusal of a bucket that can
+// still change.
+func IsNotFinal(err error) bool {
+	return hasReason(err, ReasonNotFinal)
+}
+
+func hasReason(err error, reason string) bool {
 	st, ok := status.FromError(err)
 	if !ok {
 		return false
 	}
 
 	for _, detail := range st.Details() {
-		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Reason == ReasonImportIncomplete && info.Domain == errorDomain {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Reason == reason && info.Domain == errorDomain {
 			return true
 		}
 	}
@@ -97,6 +125,8 @@ type Server struct {
 	chunkSize int
 	now       func() time.Time
 	log       log.Logger
+	// buckets serves the objects of moving buckets; nil serves none
+	buckets bucket.Backend
 
 	// final holds the snapshot taken once a volume went final, keyed by the
 	// volume and the lease whose close made it final; every later export of
@@ -118,6 +148,11 @@ func WithPeerID(fn PeerIDFn) ServerOpt {
 // WithChunkSize overrides the export chunk size.
 func WithChunkSize(size int) ServerOpt {
 	return func(s *Server) { s.chunkSize = size }
+}
+
+// WithBuckets serves the objects of the buckets that move away.
+func WithBuckets(buckets bucket.Backend) ServerOpt {
+	return func(s *Server) { s.buckets = buckets }
 }
 
 // NewServer builds the VolumeTransfer server. self is this provider's
@@ -229,6 +264,10 @@ func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_Expo
 		return err
 	}
 
+	if info.Bucket {
+		return bucketImageError(req.Owner, req.Vid)
+	}
+
 	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)
 	if err != nil {
 		return status.Error(codes.Internal, err.Error())
@@ -257,6 +296,52 @@ func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_Expo
 	}
 
 	return nil
+}
+
+// ExportObjects streams every object of a bucket that moves to the
+// requester, in key order, from after start_after. It serves a bucket only
+// once it is final: its lease here closed and no key can write to it, so
+// the requester copies its last state.
+func (s *Server) ExportObjects(req *vtv1.ExportObjectsRequest, stream vtv1.VolumeTransfer_ExportObjectsServer) error {
+	ctx := stream.Context()
+
+	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	if err != nil {
+		return err
+	}
+
+	if !info.Bucket || s.buckets == nil {
+		return status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not a bucket served here", req.Owner, req.Vid))
+	}
+
+	if finalKey == "" {
+		return notFinalError(req.Owner, req.Vid)
+	}
+
+	objects, err := s.buckets.Objects(ctx, bucket.RefFor(info.Ref.Name, req.Owner, req.Vid))
+	if err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	defer func() {
+		if err := objects.Close(); err != nil {
+			s.log.Error("closing bucket export", "volume", info.Ref.Name, "err", err)
+		}
+	}()
+
+	s.log.Info("bucket export", "volume", info.Ref.Name, "requester", req.Requester, "resumed", req.StartAfter != "")
+
+	sent, size, err := SendObjects(ctx, stream, objects, req.StartAfter, s.chunkSize)
+	if err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+
+	s.log.Info("bucket export done", "volume", info.Ref.Name, "requester", req.Requester, "objects", sent, "bytes", size)
+
+	return nil
+}
+
+func bucketImageError(owner, vid string) error {
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is a bucket: its objects move with ExportObjects", owner, vid))
 }
 
 // exportSnapshot picks the snapshot exports serve from. While the volume
@@ -318,6 +403,10 @@ func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.Sta
 	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return nil, err
+	}
+
+	if info.Bucket {
+		return nil, bucketImageError(req.Owner, req.Vid)
 	}
 
 	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)

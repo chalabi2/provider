@@ -17,6 +17,7 @@ import (
 
 	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/bucket/buckettest"
+	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 )
 
@@ -77,7 +78,7 @@ func reconcileVolume(t *testing.T, s *scaffold, name string) (*crd.Volume, error
 }
 
 func TestBucketProvisioned(t *testing.T) {
-	lid := testutil.LeaseID(t)
+	lid := firstOrderLease(t)
 	s, fake, ref := bucketScaffold(t, nil, testBucketVolume(t, lid, crd.VolumePhasePending))
 
 	vol, err := reconcileVolume(t, s, ref.UserID)
@@ -93,7 +94,7 @@ func TestBucketProvisioned(t *testing.T) {
 }
 
 func TestBucketProvisionFailureLeavesPending(t *testing.T) {
-	s, fake, ref := bucketScaffold(t, nil, testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhasePending))
+	s, fake, ref := bucketScaffold(t, nil, testBucketVolume(t, firstOrderLease(t), crd.VolumePhasePending))
 	fake.Fail("Ensure", errors.New("rgw down"))
 
 	vol, err := reconcileVolume(t, s, ref.UserID)
@@ -305,7 +306,7 @@ func TestBucketExportingThaws(t *testing.T) {
 }
 
 func TestBucketWithoutBackend(t *testing.T) {
-	s, _, ref := bucketScaffold(t, nil, testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhasePending))
+	s, _, ref := bucketScaffold(t, nil, testBucketVolume(t, firstOrderLease(t), crd.VolumePhasePending))
 	s.r.buckets = nil
 
 	vol, err := reconcileVolume(t, s, ref.UserID)
@@ -386,4 +387,179 @@ func TestBucketReleasingIsNotAdopted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, crd.VolumePhaseReleasing, after.Status.Phase)
 	require.True(t, fake.Suspended(ref))
+}
+
+// TestBucketMovingIsSealedOnceItsLeaseCloses: the keys of a bucket moving
+// away work through the reclamation window, and stop for good once the
+// lease closes, while the provider still reads the objects to hand over.
+func TestBucketMovingIsSealedOnceItsLeaseCloses(t *testing.T) {
+	vol := provisioned(testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhaseExporting), crd.VolumePhaseExporting)
+	s, fake, ref := bucketScaffold(t, nil, vol)
+	ensureFakeBucket(t, fake, ref)
+
+	_, err := fake.CreateKey(context.Background(), ref, "app", bucket.KeyReadWrite)
+	require.NoError(t, err)
+
+	_, err = reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	keys, err := fake.ListKeys(context.Background(), ref)
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "a key stopped during the reclamation window")
+
+	// the lease closed: the retention clock runs
+	after := getVolume(t, s, ref.UserID)
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	after.Status.RetainedUntil = &until
+	_, err = s.ac.AkashV2beta2().Volumes(testNS).Update(context.Background(), after, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	after, err = reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseExporting, after.Status.Phase)
+
+	keys, err = fake.ListKeys(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, keys, "a key outlived the lease of a bucket moving away")
+	require.False(t, fake.Suspended(ref), "the provider can no longer read the bucket to hand it over")
+
+	// made by hand: the next pass revokes it again
+	_, err = fake.CreateKey(context.Background(), ref, "sneaky", bucket.KeyReadWrite)
+	require.NoError(t, err)
+	_, err = reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	keys, err = fake.ListKeys(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestBucketMovingSealFailureIsReported(t *testing.T) {
+	vol := provisioned(testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhaseExporting), crd.VolumePhaseExporting)
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	vol.Status.RetainedUntil = &until
+	s, fake, ref := bucketScaffold(t, nil, vol)
+	ensureFakeBucket(t, fake, ref)
+	fake.Fail("Seal", errors.New("rgw down"))
+
+	_, err := reconcileVolume(t, s, ref.UserID)
+	require.ErrorIs(t, err, ErrVolumeOperator)
+}
+
+func TestBucketMovedHereImports(t *testing.T) {
+	lid := relistedLease(t)
+	previous := testutil.AccAddress(t).String()
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, previous, 1)}}
+	s, fake, ref := bucketScaffold(t, chain, testBucketVolume(t, lid, crd.VolumePhasePending))
+
+	vol, err := reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+
+	require.True(t, fake.Exists(ref))
+	require.Equal(t, previous, vol.Spec.ImportFrom)
+	require.False(t, vol.Status.LocalCopy)
+	require.Equal(t, crd.VolumePhaseImporting, vol.Status.Phase)
+	require.Equal(t, ref.Bucket, vol.Status.Bucket)
+	require.Equal(t, vol.Spec.GroupID.DSeq, vol.Status.BucketDSeq)
+
+	// it stays Importing until the copy parks it
+	vol, err = reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseImporting, vol.Status.Phase)
+	require.Equal(t, 1, chain.leasesCalls)
+}
+
+func TestBucketMovedHereWaitsForTheChain(t *testing.T) {
+	chain := &fakeChain{leasesErr: errors.New("node down")}
+	s, fake, ref := bucketScaffold(t, chain, testBucketVolume(t, relistedLease(t), crd.VolumePhasePending))
+
+	vol, err := reconcileVolume(t, s, ref.UserID)
+	require.Error(t, err)
+	require.Equal(t, crd.VolumePhasePending, vol.Status.Phase)
+	require.False(t, fake.Exists(ref), "a bucket whose objects are elsewhere was provisioned empty")
+}
+
+func TestBucketMovedHereWithoutChainAccessWaits(t *testing.T) {
+	s, fake, ref := bucketScaffold(t, nil, testBucketVolume(t, relistedLease(t), crd.VolumePhasePending))
+
+	vol, err := reconcileVolume(t, s, ref.UserID)
+	require.ErrorIs(t, err, ErrVolumeOperator)
+	require.Equal(t, crd.VolumePhasePending, vol.Status.Phase)
+	require.False(t, fake.Exists(ref))
+}
+
+// wonBack is a bucket this provider held on the volume's earlier lease and
+// won again: the record was reset for the new lease, the bucket kept.
+func wonBack(t *testing.T, lid mtypes.LeaseID) *crd.Volume {
+	t.Helper()
+
+	vol := provisioned(testBucketVolume(t, lid, crd.VolumePhasePending), crd.VolumePhasePending)
+
+	return vol
+}
+
+func TestBucketWonBackKeepsItsObjects(t *testing.T) {
+	lid := relistedLease(t)
+	chain := &fakeChain{leases: []replication.VolumeLease{heldBefore(lid, lid.Provider, 1)}}
+	s, fake, ref := bucketScaffold(t, chain, wonBack(t, lid))
+	ensureFakeBucket(t, fake, ref)
+
+	old, err := fake.CreateKey(context.Background(), ref, "app", bucket.KeyReadWrite)
+	require.NoError(t, err)
+	require.NoError(t, fake.Put(context.Background(), ref, old, "kept.txt", []byte("kept")))
+	require.NoError(t, fake.Suspend(context.Background(), ref))
+
+	vol, err := reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+
+	require.Empty(t, vol.Spec.ImportFrom)
+	require.Equal(t, crd.VolumePhaseProvisioned, vol.Status.Phase)
+	require.False(t, fake.Suspended(ref))
+
+	keys, err := fake.ListKeys(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, keys, "a key of the earlier lease opens the bucket")
+
+	_, body, ok := fake.Object(ref, "kept.txt")
+	require.True(t, ok)
+	require.Equal(t, []byte("kept"), body)
+}
+
+func TestBucketWonBackImportsWhatChangedElsewhere(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	lid.OSeq = 3
+	elsewhere := testutil.AccAddress(t).String()
+	chain := &fakeChain{leases: []replication.VolumeLease{
+		heldBefore(lid, lid.Provider, 1),
+		heldBefore(lid, elsewhere, 2),
+	}}
+	s, fake, ref := bucketScaffold(t, chain, wonBack(t, lid))
+	ensureFakeBucket(t, fake, ref)
+
+	_, err := fake.CreateKey(context.Background(), ref, "app", bucket.KeyReadWrite)
+	require.NoError(t, err)
+	require.NoError(t, fake.Suspend(context.Background(), ref))
+
+	vol, err := reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+
+	require.Equal(t, elsewhere, vol.Spec.ImportFrom)
+	require.True(t, vol.Status.LocalCopy, "the bucket here stands if the newer one never arrived anywhere")
+	require.Equal(t, crd.VolumePhaseImporting, vol.Status.Phase)
+	require.False(t, fake.Suspended(ref), "the newer objects cannot be written into a suspended bucket")
+
+	keys, err := fake.ListKeys(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestBucketImportingGrowsQuota(t *testing.T) {
+	vol := provisioned(testBucketVolume(t, relistedLease(t), crd.VolumePhaseImporting), crd.VolumePhaseImporting)
+	vol.Spec.ImportFrom = testutil.AccAddress(t).String()
+	vol.Spec.Size = "4194304"
+	s, fake, ref := bucketScaffold(t, &fakeChain{}, vol)
+	ensureFakeBucket(t, fake, ref)
+
+	after, err := reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	require.Equal(t, int64(4194304), fake.Quota(ref))
+	require.Equal(t, crd.VolumePhaseImporting, after.Status.Phase)
 }

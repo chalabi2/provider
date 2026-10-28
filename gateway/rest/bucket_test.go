@@ -345,6 +345,22 @@ func TestBucketInactiveLeaseKeys(t *testing.T) {
 	}
 }
 
+func TestBucketKeysWaitForAMoveToLand(t *testing.T) {
+	importing := func(v *crd.Volume) {
+		v.Status.Phase = crd.VolumePhaseImporting
+		v.Spec.ImportFrom = "akash1previousprovider"
+	}
+
+	runBucketTest(t, true, importing, func(bt *bucketTest) {
+		status, body := bt.do(http.MethodPost, apclient.BucketKeysPath(bt.lid), keyRequest("app", "read"), fullAccess)
+		require.Equal(t, http.StatusConflict, status)
+		require.Contains(t, body, "copied in")
+
+		status, _ = bt.do(http.MethodGet, apclient.BucketPath(bt.lid), "", fullAccess)
+		require.Equal(t, http.StatusOK, status)
+	})
+}
+
 func TestBucketNotFound(t *testing.T) {
 	for name, vol := range map[string]func(*crd.Volume){
 		"mounted volume": func(v *crd.Volume) { v.Spec.Access = "" },

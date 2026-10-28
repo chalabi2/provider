@@ -100,6 +100,13 @@ func (g *bucketGateway) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// a key now would write into a bucket the previous provider's objects
+	// are still being copied into
+	if vol.Status.Phase == crd.VolumePhaseImporting {
+		http.Error(w, "the bucket's objects are still being copied in from its previous provider", http.StatusConflict)
+		return
+	}
+
 	if !bucketActive(vol) {
 		http.Error(w, "the bucket's lease is not active", http.StatusConflict)
 		return

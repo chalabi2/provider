@@ -3,7 +3,10 @@ package buckettest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"sort"
 	"testing"
 	"time"
 
@@ -182,6 +185,119 @@ func Conformance(t *testing.T, backend bucket.Backend, data DataPlane) {
 		}, settle, tick, "a resumed bucket lost its data")
 	})
 
+	t.Run("seals every key, and only the provider reaches the objects", func(t *testing.T) {
+		spec := newSpec(t, backend, 1<<20)
+
+		key, err := backend.CreateKey(ctx, spec.Ref, "app", bucket.KeyReadWrite)
+		require.NoError(t, err)
+		require.NoError(t, data.Put(ctx, spec.Ref, key, "kept.txt", []byte("kept")))
+
+		require.NoError(t, backend.Seal(ctx, spec.Ref))
+		require.NoError(t, backend.Seal(ctx, spec.Ref), "a second seal fails")
+
+		keys, err := backend.ListKeys(ctx, spec.Ref)
+		require.NoError(t, err)
+		assert.Empty(t, keys, "keys survive a seal")
+
+		assert.Eventually(t, func() bool {
+			_, err := data.Get(ctx, spec.Ref, key, "kept.txt")
+			return err != nil
+		}, settle, tick, "a sealed bucket's key still reads")
+		assert.Error(t, data.Put(ctx, spec.Ref, key, "late.txt", []byte("x")), "a sealed bucket's key writes")
+
+		objects := openObjects(t, backend, spec.Ref)
+
+		listed, more, err := objects.List(ctx, "", 0)
+		require.NoError(t, err)
+		assert.False(t, more)
+		assert.Equal(t, []bucket.ObjectInfo{{Key: "kept.txt", Size: 4}}, listed)
+
+		_, body := getObject(t, objects, "kept.txt")
+		assert.Equal(t, []byte("kept"), body)
+	})
+
+	t.Run("moves objects whole, as they are served", func(t *testing.T) {
+		spec := newSpec(t, backend, 1<<20)
+		objects := openObjects(t, backend, spec.Ref)
+
+		keys := []string{
+			"plain.txt",
+			"dir/nested/file.bin",
+			"with space+plus&and=eq?q#h;semi,comma.txt",
+			"ünïcødé/文件.txt",
+			"percent%2Fliteral",
+			"tilde~star*paren(1)!'$@:.txt",
+			"empty",
+		}
+
+		written := make(map[string]bucket.ObjectInfo, len(keys))
+		for i, key := range keys {
+			body := bytes.Repeat([]byte{byte('a' + i)}, i*100)
+			info := bucket.ObjectInfo{
+				Key:                key,
+				Size:               int64(len(body)),
+				ContentType:        "text/plain; charset=utf-8",
+				ContentEncoding:    "identity",
+				ContentDisposition: `attachment; filename="file.txt"`,
+				ContentLanguage:    "en",
+				CacheControl:       "max-age=60",
+				Expires:            "Thu, 01 Dec 2050 16:00:00 GMT",
+				Metadata:           map[string]string{"origin": "conformance", "multi-word": fmt.Sprint(i)},
+			}
+
+			putObject(t, objects, info, body)
+			written[key] = info
+		}
+
+		var listed []string
+		for after, more := "", true; more; {
+			var page []bucket.ObjectInfo
+			var err error
+
+			page, more, err = objects.List(ctx, after, 2)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(page), 2)
+
+			for _, object := range page {
+				assert.Equal(t, written[object.Key].Size, object.Size, object.Key)
+				listed = append(listed, object.Key)
+				after = object.Key
+			}
+		}
+
+		sorted := append([]string(nil), keys...)
+		sort.Strings(sorted)
+		assert.Equal(t, sorted, listed, "a listing is not every key in order")
+
+		for i, key := range keys {
+			info, body := getObject(t, objects, key)
+			assert.Equal(t, written[key], info, key)
+			assert.Equal(t, bytes.Repeat([]byte{byte('a' + i)}, i*100), body, key)
+		}
+
+		require.NoError(t, objects.Delete(ctx, "plain.txt"))
+		require.NoError(t, objects.Delete(ctx, "plain.txt"), "deleting a missing object fails")
+
+		_, _, err := objects.Get(ctx, "plain.txt")
+		assert.ErrorIs(t, err, bucket.ErrObjectNotFound)
+
+		body := []byte("not what the digest says")
+		wrong := sha256.Sum256([]byte("something else"))
+		assert.Error(t, objects.Put(ctx, bucket.ObjectInfo{Key: "corrupt", Size: int64(len(body))}, bytes.NewReader(body), wrong[:]), "an object that does not match its digest is written")
+
+		_, _, err = objects.Get(ctx, "corrupt")
+		assert.ErrorIs(t, err, bucket.ErrObjectNotFound, "an object that does not match its digest is kept")
+	})
+
+	t.Run("the provider's writes stay within the quota", func(t *testing.T) {
+		spec := newSpec(t, backend, 64<<10)
+		objects := openObjects(t, backend, spec.Ref)
+
+		big := bytes.Repeat([]byte("x"), 128<<10)
+		sum := sha256.Sum256(big)
+		assert.Error(t, objects.Put(ctx, bucket.ObjectInfo{Key: "big", Size: int64(len(big))}, bytes.NewReader(big), sum[:]), "a write over the quota succeeds")
+	})
+
 	t.Run("deletes the bucket, its data and its keys", func(t *testing.T) {
 		spec := newSpec(t, backend, 1<<20)
 
@@ -242,6 +358,9 @@ func Conformance(t *testing.T, backend bucket.Backend, data DataPlane) {
 		assert.ErrorIs(t, backend.RevokeKey(ctx, other, "app"), bucket.ErrConflict, "RevokeKey")
 		assert.ErrorIs(t, backend.Suspend(ctx, other), bucket.ErrConflict, "Suspend")
 		assert.ErrorIs(t, backend.Resume(ctx, other), bucket.ErrConflict, "Resume")
+		assert.ErrorIs(t, backend.Seal(ctx, other), bucket.ErrConflict, "Seal")
+		_, err = backend.Objects(ctx, other)
+		assert.ErrorIs(t, err, bucket.ErrConflict, "Objects")
 		assert.ErrorIs(t, backend.Delete(ctx, other), bucket.ErrConflict, "Delete")
 
 		keys, err := backend.ListKeys(ctx, spec.Ref)
@@ -268,7 +387,46 @@ func assertMissing(t *testing.T, backend bucket.Backend, ref bucket.Ref) {
 	assert.ErrorIs(t, backend.RevokeKey(ctx, ref, "app"), bucket.ErrNotFound, "RevokeKey")
 	assert.ErrorIs(t, backend.Suspend(ctx, ref), bucket.ErrNotFound, "Suspend")
 	assert.ErrorIs(t, backend.Resume(ctx, ref), bucket.ErrNotFound, "Resume")
+	assert.ErrorIs(t, backend.Seal(ctx, ref), bucket.ErrNotFound, "Seal")
+	_, err = backend.Objects(ctx, ref)
+	assert.ErrorIs(t, err, bucket.ErrNotFound, "Objects")
 	assert.NoError(t, backend.Delete(ctx, ref), "Delete")
+}
+
+// openObjects opens the provider's session on a bucket's objects for the
+// test and closes it afterwards.
+func openObjects(t *testing.T, backend bucket.Backend, ref bucket.Ref) bucket.Objects {
+	t.Helper()
+
+	objects, err := backend.Objects(context.Background(), ref)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, objects.Close())
+	})
+
+	return objects
+}
+
+func putObject(t *testing.T, objects bucket.Objects, info bucket.ObjectInfo, body []byte) {
+	t.Helper()
+
+	sum := sha256.Sum256(body)
+	require.NoError(t, objects.Put(context.Background(), info, bytes.NewReader(body), sum[:]), info.Key)
+}
+
+func getObject(t *testing.T, objects bucket.Objects, key string) (bucket.ObjectInfo, []byte) {
+	t.Helper()
+
+	info, rc, err := objects.Get(context.Background(), key)
+	require.NoError(t, err, key)
+	defer func() {
+		assert.NoError(t, rc.Close())
+	}()
+
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err, key)
+
+	return info, body
 }
 
 // newSpec provisions a bucket for the test and deletes it afterwards.

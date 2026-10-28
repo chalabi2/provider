@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/akash-network/provider/bucket"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	akashclientset "github.com/akash-network/provider/pkg/client/clientset/versioned"
 )
@@ -27,14 +28,18 @@ type crdVolumeSource struct {
 	ac akashclientset.Interface
 	kc kubernetes.Interface
 	ns string
+	// buckets answers whether a key can still write to a bucket; nil when
+	// the provider serves none
+	buckets bucket.Backend
 }
 
 var _ VolumeSource = (*crdVolumeSource)(nil)
 
 // NewCRDVolumeSource resolves volumes from the Volume CRDs in namespace
-// ns and their backing PVs.
-func NewCRDVolumeSource(ac akashclientset.Interface, kc kubernetes.Interface, ns string) VolumeSource {
-	return &crdVolumeSource{ac: ac, kc: kc, ns: ns}
+// ns and their backing PVs, and buckets through buckets, which is nil on a
+// provider that serves none.
+func NewCRDVolumeSource(ac akashclientset.Interface, kc kubernetes.Interface, ns string, buckets bucket.Backend) VolumeSource {
+	return &crdVolumeSource{ac: ac, kc: kc, ns: ns, buckets: buckets}
 }
 
 func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (VolumeInfo, error) {
@@ -52,6 +57,10 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 	dseq, err := strconv.ParseUint(vol.Spec.GroupID.DSeq, 10, 64)
 	if err != nil {
 		return VolumeInfo{}, fmt.Errorf("%w: volume %s dseq %q: %s", ErrReplication, name, vol.Spec.GroupID.DSeq, err.Error())
+	}
+
+	if vol.IsBucket() {
+		return s.resolveBucket(ctx, vol, dseq)
 	}
 
 	info := VolumeInfo{
@@ -87,6 +96,33 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 	case pv.Spec.Local != nil:
 		info.Ref.Path = pv.Spec.Local.Path
 	}
+
+	return info, nil
+}
+
+// resolveBucket reports a bucket. Only one moving away exports: past its
+// reclamation window a retained bucket is suspended, which the provider's
+// own reads are refused by too. It is quiesced once no key is left to
+// write to it.
+func (s *crdVolumeSource) resolveBucket(ctx context.Context, vol *crd.Volume, dseq uint64) (VolumeInfo, error) {
+	info := VolumeInfo{
+		Ref:        Ref{Name: vol.Name},
+		DSeq:       dseq,
+		Bucket:     true,
+		Exportable: vol.Status.Bucket != "" && vol.Status.Phase == crd.VolumePhaseExporting && s.buckets != nil,
+		Incomplete: vol.Spec.ImportFrom != "",
+	}
+
+	if !info.Exportable {
+		return info, nil
+	}
+
+	keys, err := s.buckets.ListKeys(ctx, bucket.RefFor(vol.Name, vol.Spec.Owner, vol.Spec.VID))
+	if err != nil {
+		return VolumeInfo{}, err
+	}
+
+	info.Quiesced = len(keys) == 0
 
 	return info, nil
 }

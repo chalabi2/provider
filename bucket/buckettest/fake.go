@@ -3,11 +3,15 @@
 package buckettest
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"sort"
 	"sync"
 
@@ -24,7 +28,14 @@ type fakeUser struct {
 	suspended bool
 	quota     int64
 	keys      map[string]bucket.Key
-	objects   map[string][]byte
+	objects   map[string]fakeObject
+	// sessions counts the provider's open object sessions
+	sessions int
+}
+
+type fakeObject struct {
+	info bucket.ObjectInfo
+	body []byte
 }
 
 // Fake is an in-memory bucket.Backend with a data plane that enforces keys,
@@ -97,7 +108,7 @@ func (f *Fake) Ensure(_ context.Context, spec bucket.Spec) error {
 
 	user, err := f.user(spec.Ref)
 	if errors.Is(err, bucket.ErrNotFound) {
-		user = &fakeUser{owner: spec.Owner, vid: spec.Vid, bucket: spec.Bucket, keys: map[string]bucket.Key{}, objects: map[string][]byte{}}
+		user = &fakeUser{owner: spec.Owner, vid: spec.Vid, bucket: spec.Bucket, keys: map[string]bucket.Key{}, objects: map[string]fakeObject{}}
 		f.users[spec.UserID] = user
 		err = nil
 	}
@@ -124,6 +135,187 @@ func (f *Fake) Resume(_ context.Context, ref bucket.Ref) error {
 		user.suspended = false
 		return nil
 	})
+}
+
+func (f *Fake) Seal(_ context.Context, ref bucket.Ref) error {
+	return f.with("Seal", ref, func(user *fakeUser) error {
+		user.keys = map[string]bucket.Key{}
+		return nil
+	})
+}
+
+// Objects opens a session that, like the owner's own key on an S3 server,
+// is refused while the bucket is suspended.
+func (f *Fake) Objects(_ context.Context, ref bucket.Ref) (bucket.Objects, error) {
+	err := f.with("Objects", ref, func(user *fakeUser) error {
+		if _, ok := f.buckets[ref.Bucket]; !ok {
+			return fmt.Errorf("%w: bucket %s", bucket.ErrNotFound, ref.Bucket)
+		}
+
+		user.sessions++
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &fakeObjects{f: f, ref: ref}, nil
+}
+
+// Sessions reports how many object sessions on ref's bucket are open.
+func (f *Fake) Sessions(ref bucket.Ref) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if user, ok := f.users[ref.UserID]; ok {
+		return user.sessions
+	}
+	return 0
+}
+
+// Object reads an object as stored, or reports it missing.
+func (f *Fake) Object(ref bucket.Ref, key string) (bucket.ObjectInfo, []byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	user, ok := f.users[ref.UserID]
+	if !ok {
+		return bucket.ObjectInfo{}, nil, false
+	}
+
+	object, ok := user.objects[key]
+
+	return object.info, append([]byte(nil), object.body...), ok
+}
+
+type fakeObjects struct {
+	f      *Fake
+	ref    bucket.Ref
+	closed bool
+}
+
+var _ bucket.Objects = (*fakeObjects)(nil)
+
+// open runs fn on the session's bucket as its owner would reach it.
+func (o *fakeObjects) open(method string, fn func(*fakeUser) error) error {
+	o.f.mu.Lock()
+	defer o.f.mu.Unlock()
+
+	if err := o.f.errs[method]; err != nil {
+		return err
+	}
+	if o.closed {
+		return fmt.Errorf("%w: session closed", ErrRefused)
+	}
+
+	user, err := o.f.user(o.ref)
+	if err != nil {
+		return err
+	}
+	if user.suspended {
+		return fmt.Errorf("%w: user suspended", ErrRefused)
+	}
+
+	return fn(user)
+}
+
+func (o *fakeObjects) List(_ context.Context, after string, limit int) ([]bucket.ObjectInfo, bool, error) {
+	var (
+		objects []bucket.ObjectInfo
+		more    bool
+	)
+
+	err := o.open("List", func(user *fakeUser) error {
+		keys := make([]string, 0, len(user.objects))
+		for key := range user.objects {
+			if key > after {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+
+		if limit <= 0 || limit > 1000 {
+			limit = 1000
+		}
+		if more = len(keys) > limit; more {
+			keys = keys[:limit]
+		}
+
+		for _, key := range keys {
+			objects = append(objects, bucket.ObjectInfo{Key: key, Size: user.objects[key].info.Size})
+		}
+
+		return nil
+	})
+
+	return objects, more, err
+}
+
+func (o *fakeObjects) Get(_ context.Context, key string) (bucket.ObjectInfo, io.ReadCloser, error) {
+	var object fakeObject
+
+	err := o.open("Get", func(user *fakeUser) error {
+		var ok bool
+		if object, ok = user.objects[key]; !ok {
+			return bucket.ErrObjectNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return bucket.ObjectInfo{}, nil, err
+	}
+
+	info := object.info
+	info.Metadata = maps.Clone(object.info.Metadata)
+
+	return info, io.NopCloser(bytes.NewReader(append([]byte(nil), object.body...))), nil
+}
+
+func (o *fakeObjects) Put(_ context.Context, info bucket.ObjectInfo, body io.ReaderAt, sum []byte) error {
+	data, err := io.ReadAll(io.NewSectionReader(body, 0, info.Size))
+	if err != nil {
+		return err
+	}
+
+	if digest := sha256.Sum256(data); int64(len(data)) != info.Size || !bytes.Equal(digest[:], sum) {
+		return fmt.Errorf("%w: the content does not match its sha256", ErrRefused)
+	}
+
+	return o.open("Put", func(user *fakeUser) error {
+		if used := user.usage().UsedBytes - int64(len(user.objects[info.Key].body)); used+info.Size > user.quota {
+			return fmt.Errorf("%w: quota exceeded", ErrRefused)
+		}
+
+		stored := info
+		stored.Metadata = maps.Clone(info.Metadata)
+		user.objects[info.Key] = fakeObject{info: stored, body: data}
+
+		return nil
+	})
+}
+
+func (o *fakeObjects) Delete(_ context.Context, key string) error {
+	return o.open("Delete", func(user *fakeUser) error {
+		delete(user.objects, key)
+		return nil
+	})
+}
+
+func (o *fakeObjects) Close() error {
+	o.f.mu.Lock()
+	defer o.f.mu.Unlock()
+
+	if o.closed {
+		return nil
+	}
+	o.closed = true
+
+	if user, ok := o.f.users[o.ref.UserID]; ok {
+		user.sessions--
+	}
+
+	return nil
 }
 
 func (f *Fake) Delete(_ context.Context, ref bucket.Ref) error {
@@ -224,11 +416,14 @@ func (f *Fake) Put(_ context.Context, ref bucket.Ref, key bucket.Key, object str
 	if key.Access != bucket.KeyReadWrite {
 		return fmt.Errorf("%w: key %s is read-only", ErrRefused, key.Name)
 	}
-	if used := user.usage().UsedBytes - int64(len(user.objects[object])); used+int64(len(body)) > user.quota {
+	if used := user.usage().UsedBytes - int64(len(user.objects[object].body)); used+int64(len(body)) > user.quota {
 		return fmt.Errorf("%w: quota exceeded", ErrRefused)
 	}
 
-	user.objects[object] = append([]byte(nil), body...)
+	user.objects[object] = fakeObject{
+		info: bucket.ObjectInfo{Key: object, Size: int64(len(body))},
+		body: append([]byte(nil), body...),
+	}
 
 	return nil
 }
@@ -242,12 +437,12 @@ func (f *Fake) Get(_ context.Context, ref bucket.Ref, key bucket.Key, object str
 		return nil, err
 	}
 
-	body, ok := user.objects[object]
+	stored, ok := user.objects[object]
 	if !ok {
 		return nil, fmt.Errorf("%w: no object %s", ErrRefused, object)
 	}
 
-	return append([]byte(nil), body...), nil
+	return append([]byte(nil), stored.body...), nil
 }
 
 // authorize finds the bucket a key opens, as an S3 server would: by the key
@@ -304,8 +499,8 @@ func (f *Fake) with(method string, ref bucket.Ref, fn func(*fakeUser) error) err
 
 func (u *fakeUser) usage() bucket.Usage {
 	var usage bucket.Usage
-	for _, body := range u.objects {
-		usage.UsedBytes += int64(len(body))
+	for _, object := range u.objects {
+		usage.UsedBytes += int64(len(object.body))
 		usage.Objects++
 	}
 

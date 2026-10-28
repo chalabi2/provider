@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -33,6 +34,7 @@ var (
 	ErrTooManyKeys    = errors.New("bucket access key limit reached")
 	ErrInvalidKeyName = errors.New("invalid access key name")
 	ErrInvalidAccess  = errors.New("invalid access key access level")
+	ErrObjectNotFound = errors.New("object not found")
 )
 
 // Ref names a bucket, the backend user that owns it and the volume both
@@ -73,6 +75,39 @@ type Usage struct {
 	Objects   int64
 }
 
+// ObjectInfo describes an object: its key, its size and the headers it is
+// served with. A listing fills only Key and Size.
+type ObjectInfo struct {
+	Key                string
+	Size               int64
+	ContentType        string
+	ContentEncoding    string
+	ContentDisposition string
+	ContentLanguage    string
+	CacheControl       string
+	Expires            string
+	// Metadata is the object's user metadata, keyed by its lower-case name
+	// without the x-amz-meta- prefix.
+	Metadata map[string]string
+}
+
+// Objects reaches one bucket's objects as the provider itself, to move them
+// between providers. It signs with a key of the bucket's owner that Close
+// drops, so the provider keeps no key to the tenant's data.
+type Objects interface {
+	// List returns up to limit objects whose keys sort after after, in key
+	// order, and whether more follow them.
+	List(ctx context.Context, after string, limit int) ([]ObjectInfo, bool, error)
+	// Get opens an object. The caller closes its body.
+	Get(ctx context.Context, key string) (ObjectInfo, io.ReadCloser, error)
+	// Put writes an object whole. body holds exactly info.Size bytes whose
+	// sha256 is sum, which the S3 server checks them against.
+	Put(ctx context.Context, info ObjectInfo, body io.ReaderAt, sum []byte) error
+	// Delete removes an object. A missing one is not an error.
+	Delete(ctx context.Context, key string) error
+	Close() error
+}
+
 // Backend provisions buckets and their access keys on an S3 server.
 type Backend interface {
 	// Ensure creates the bucket's user, quota and bucket, or brings an
@@ -83,6 +118,13 @@ type Backend interface {
 	// Resume lifts a suspension and revokes every key, so the bucket's new
 	// lease starts with none.
 	Resume(ctx context.Context, ref Ref) error
+	// Seal revokes every key of the bucket, so nothing writes to it again
+	// and only the provider still reads it, to hand its objects to the
+	// provider the bucket moves to.
+	Seal(ctx context.Context, ref Ref) error
+	// Objects opens the bucket's objects to the provider itself. It fails
+	// with ErrNotFound when the bucket does not exist.
+	Objects(ctx context.Context, ref Ref) (Objects, error)
 	// Delete removes the bucket, its objects and its user. It is idempotent.
 	Delete(ctx context.Context, ref Ref) error
 	CreateKey(ctx context.Context, ref Ref, name string, access KeyAccess) (Key, error)

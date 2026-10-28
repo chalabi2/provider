@@ -15,6 +15,8 @@ import (
 	kfake "k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
+	"github.com/akash-network/provider/bucket"
+	"github.com/akash-network/provider/bucket/buckettest"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	afake "github.com/akash-network/provider/pkg/client/clientset/versioned/fake"
 )
@@ -192,4 +194,77 @@ func podMounting(phase corev1.PodPhase) *corev1.Pod {
 		},
 		Status: corev1.PodStatus{Phase: phase},
 	}
+}
+
+// bucketSourceWorld resolves a bucket volume in phase whose bucket exists.
+func bucketSourceWorld(t *testing.T, phase crd.VolumePhase, importFrom string) (*crdVolumeSource, *buckettest.Fake, bucket.Ref) {
+	t.Helper()
+
+	vol := sourceVolume(phase, importFrom)
+	vol.Spec.Access = "bucket"
+	vol.Status.PVName = ""
+
+	ref := bucket.RefFor(vol.Name, authzOwner, authzVID)
+	vol.Status.Bucket = ref.Bucket
+
+	fake := buckettest.NewFake()
+	require.NoError(t, fake.Ensure(context.Background(), bucket.Spec{Ref: ref, SizeBytes: 1 << 20}))
+
+	src := sourceWorld(t, vol)
+	src.buckets = fake
+
+	return src, fake, ref
+}
+
+func TestSourceResolvesABucketMovingAway(t *testing.T) {
+	src, fake, ref := bucketSourceWorld(t, crd.VolumePhaseExporting, "")
+
+	info, err := src.Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.True(t, info.Bucket)
+	require.True(t, info.Exportable)
+	require.True(t, info.Quiesced, "a bucket no key opens is quiesced")
+	require.False(t, info.Incomplete)
+	require.Equal(t, ref.UserID, info.Ref.Name)
+
+	_, err = fake.CreateKey(context.Background(), ref, "app", bucket.KeyReadWrite)
+	require.NoError(t, err)
+
+	info, err = src.Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.False(t, info.Quiesced, "a key can still write")
+}
+
+func TestSourceExportsOnlyBucketsMovingAway(t *testing.T) {
+	for _, phase := range []crd.VolumePhase{
+		crd.VolumePhasePending,
+		crd.VolumePhaseProvisioned,
+		crd.VolumePhaseImporting,
+		crd.VolumePhaseRetained,
+		crd.VolumePhaseReleasing,
+	} {
+		src, _, _ := bucketSourceWorld(t, phase, "")
+
+		info, err := src.Resolve(context.Background(), authzOwner, authzVID)
+		require.NoError(t, err, phase)
+		require.True(t, info.Bucket, phase)
+		require.False(t, info.Exportable, phase)
+	}
+}
+
+func TestSourceExportsNoBucketWithoutItsBackend(t *testing.T) {
+	src, _, _ := bucketSourceWorld(t, crd.VolumePhaseExporting, "")
+	src.buckets = nil
+
+	info, err := src.Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.False(t, info.Exportable)
+}
+
+func TestSourceReportsABucketThatNeverFinishedArriving(t *testing.T) {
+	src, _, _ := bucketSourceWorld(t, crd.VolumePhaseExporting, authzStranger)
+
+	info, err := src.Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.True(t, info.Incomplete)
 }

@@ -16,6 +16,9 @@ import (
 // suspended (every key refused) once the lease closes, resumed with no keys
 // when another deployment of the owner adopts it, and deleted at the
 // retention deadline, the same single destruction path as a mounted volume.
+// A bucket that moves is sealed once its lease closes, for the provider it
+// moves to to copy; the bucket won here on a re-listed order imports from
+// the provider that held it last before it hands out any key.
 func (r *reconciler) reconcileBucket(ctx context.Context, vol *crd.Volume) error {
 	if r.buckets == nil {
 		return fmt.Errorf("%w: volume %s is a bucket and this operator serves none", ErrVolumeOperator, vol.Name)
@@ -38,9 +41,20 @@ func (r *reconciler) reconcileBucket(ctx context.Context, vol *crd.Volume) error
 	switch vol.Status.Phase {
 	case crd.VolumePhaseExporting:
 		// the reclaim window: the lease is still active and its keys work
-		if vol.Status.RetainedUntil != nil && r.now().After(vol.Status.RetainedUntil.Time) {
+		if vol.Status.RetainedUntil == nil {
+			return nil
+		}
+
+		if r.now().After(vol.Status.RetainedUntil.Time) {
 			vol.Status.Phase = crd.VolumePhaseRetained
 			return r.updateStatus(ctx, vol)
+		}
+
+		// the lease closed and the bucket moves: no key writes to it again,
+		// so what the next provider copies is its last state. Every pass,
+		// so a key made by hand stops again.
+		if err := r.buckets.Seal(ctx, ref); err != nil {
+			return fmt.Errorf("%w: seal bucket of %s: %w", ErrVolumeOperator, vol.Name, err)
 		}
 
 		return nil
@@ -49,8 +63,21 @@ func (r *reconciler) reconcileBucket(ctx context.Context, vol *crd.Volume) error
 	default:
 	}
 
+	// won on a re-listed order: the data is copied from the provider that
+	// held the bucket last, unless that was this provider and the bucket of
+	// its earlier lease is still here
+	if vol.Status.Phase == crd.VolumePhasePending && vol.Spec.ImportFrom == "" {
+		if err := r.recordImportSource(ctx, vol, vol.Status.Bucket != ""); err != nil {
+			return err
+		}
+	}
+
 	if vol.Status.Bucket == "" {
 		return r.provisionBucket(ctx, vol, ref)
+	}
+
+	if vol.Status.Phase == crd.VolumePhasePending {
+		return r.reopenBucket(ctx, vol, ref)
 	}
 
 	if vol.Status.Phase == crd.VolumePhaseRetained {
@@ -70,13 +97,42 @@ func (r *reconciler) provisionBucket(ctx context.Context, vol *crd.Volume, ref b
 		return err
 	}
 
-	r.log.Info("bucket provisioned", "volume", vol.Name, "bucket", ref.Bucket)
+	r.log.Info("bucket provisioned", "volume", vol.Name, "bucket", ref.Bucket, "import_from", vol.Spec.ImportFrom)
 
 	vol.Status.Bucket = ref.Bucket
 	vol.Status.BucketDSeq = vol.Spec.GroupID.DSeq
-	if vol.Status.Phase == "" || vol.Status.Phase == crd.VolumePhasePending {
+
+	switch {
+	case vol.Spec.ImportFrom != "":
+		// no key until the objects have arrived
+		vol.Status.Phase = crd.VolumePhaseImporting
+	case vol.Status.Phase == "" || vol.Status.Phase == crd.VolumePhasePending:
 		vol.Status.Phase = crd.VolumePhaseProvisioned
 	}
+
+	return r.updateStatus(ctx, vol)
+}
+
+// reopenBucket gives the bucket this provider kept from an earlier lease of
+// the volume to the lease it won again. Every key of the earlier lease is
+// revoked. The bucket stands as it is when no provider held the volume
+// since, and otherwise takes in the newer objects first.
+func (r *reconciler) reopenBucket(ctx context.Context, vol *crd.Volume, ref bucket.Ref) error {
+	if err := r.buckets.Resume(ctx, ref); err != nil {
+		return fmt.Errorf("%w: reopen bucket of %s: %w", ErrVolumeOperator, vol.Name, err)
+	}
+
+	if err := r.ensureBucket(ctx, vol, ref); err != nil {
+		return err
+	}
+
+	vol.Status.BucketDSeq = vol.Spec.GroupID.DSeq
+	vol.Status.Phase = crd.VolumePhaseProvisioned
+	if vol.Spec.ImportFrom != "" {
+		vol.Status.Phase = crd.VolumePhaseImporting
+	}
+
+	r.log.Info("bucket won back", "volume", vol.Name, "phase", vol.Status.Phase, "import_from", vol.Spec.ImportFrom)
 
 	return r.updateStatus(ctx, vol)
 }

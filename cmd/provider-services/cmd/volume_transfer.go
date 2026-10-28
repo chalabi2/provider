@@ -24,6 +24,7 @@ import (
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtv1 "pkg.akt.dev/go/volume/v1"
 
+	"github.com/akash-network/provider/bucket"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
 	gwutils "github.com/akash-network/provider/gateway/utils"
 	"github.com/akash-network/provider/operator/inventory"
@@ -43,13 +44,14 @@ type volumeTransfer struct {
 // §2.7, §5.5): authorization derived from chain state on both ends, exports
 // and imports through the stream-export driver - rbd against
 // rook-ceph-tools for RBD-backed PVs, a directory-tree copy for
-// local-path. Both directions authenticate with this provider's x/cert
-// identity.
+// local-path - and the objects of buckets through buckets, nil on a
+// provider that serves none. Both directions authenticate with this
+// provider's x/cert identity.
 //
 // The rbd-mirror driver is an opt-in stub: selecting it fails loudly at
 // startup (replication.ErrNotImplemented) rather than silently mirroring
 // nothing.
-func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.CertGetter, self string, logger log.Logger) (*volumeTransfer, error) {
+func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.CertGetter, self string, buckets bucket.Backend, logger log.Logger) (*volumeTransfer, error) {
 	switch driver := viper.GetString(FlagVolumeReplicationDriver); driver {
 	case replication.DriverStreamExport:
 	case replication.DriverRBDMirror:
@@ -105,7 +107,7 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 	)
 
 	chain := replication.NewChainState(cl.Query())
-	volumes := replication.NewCRDVolumeSource(ac, kc, ns)
+	volumes := replication.NewCRDVolumeSource(ac, kc, ns, buckets)
 	port := viper.GetInt(FlagVolumeTransferPort)
 
 	dial := func(ctx context.Context, source string) (vtv1.VolumeTransferClient, io.Closer, error) {
@@ -139,7 +141,7 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 	}
 
 	return &volumeTransfer{
-		server: replication.NewServer(driver, chain, volumes, self, logger),
+		server: replication.NewServer(driver, chain, volumes, self, logger, replication.WithBuckets(buckets)),
 		migrations: replication.NewMigrations(replication.MigrationsConfig{
 			Volumes:   ac,
 			Namespace: ns,
@@ -147,6 +149,7 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 			Chain:     chain,
 			Source:    volumes,
 			Driver:    driver,
+			Buckets:   buckets,
 			Dial:      dial,
 			Evict:     evict,
 			Sweep:     files.RemoveStale,
