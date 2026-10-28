@@ -559,13 +559,30 @@ func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd
 	return nil
 }
 
-func (op *storageOperator) applyAttachment(ctx context.Context, ref dv1.VolumeRef, lease string) error {
-	name := crd.VolumeName(ref.Owner, ref.Name)
+// volume reads the Volume CRD of owner/vid. A record of another volume
+// that shares the name counts as missing, so no event or request can act on
+// it.
+func (op *storageOperator) volume(ctx context.Context, owner, vid string) (*crd.Volume, error) {
+	name := crd.VolumeName(owner, vid)
 
 	vol, err := op.ac.AkashV2beta2().Volumes(op.ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
+		return nil, err
+	}
+
+	if !vol.Matches(owner, vid) {
+		op.log.Error("volume name collision", "volume", name, "owner", owner, "vid", vid)
+		return nil, kerrors.NewNotFound(crd.Resource("volumes"), name)
+	}
+
+	return vol, nil
+}
+
+func (op *storageOperator) applyAttachment(ctx context.Context, ref dv1.VolumeRef, lease string) error {
+	vol, err := op.volume(ctx, ref.Owner, ref.Name)
+	if err != nil {
 		if kerrors.IsNotFound(err) {
-			op.log.Error("attach event for unknown volume", "name", name, "ref", ref.String())
+			op.log.Error("attach event for unknown volume", "ref", ref.String())
 			return nil
 		}
 
@@ -585,9 +602,7 @@ func (op *storageOperator) applyAttachment(ctx context.Context, ref dv1.VolumeRe
 }
 
 func (op *storageOperator) applyDetachment(ctx context.Context, ref dv1.VolumeRef, lease string) error {
-	name := crd.VolumeName(ref.Owner, ref.Name)
-
-	vol, err := op.ac.AkashV2beta2().Volumes(op.ns).Get(ctx, name, metav1.GetOptions{})
+	vol, err := op.volume(ctx, ref.Owner, ref.Name)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return nil
@@ -607,9 +622,7 @@ func (op *storageOperator) applyDetachment(ctx context.Context, ref dv1.VolumeRe
 // reconciler notices the spec/PV identity split and performs the verified
 // re-bind; until then the volume is frozen in Adopting.
 func (op *storageOperator) applyAdoption(ctx context.Context, ev *dv1.EventVolumeAdopted) error {
-	name := crd.VolumeName(ev.ID.Owner, ev.Vid)
-
-	vol, err := op.ac.AkashV2beta2().Volumes(op.ns).Get(ctx, name, metav1.GetOptions{})
+	vol, err := op.volume(ctx, ev.ID.Owner, ev.Vid)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return nil
@@ -630,7 +643,7 @@ func (op *storageOperator) applyAdoption(ctx context.Context, ev *dv1.EventVolum
 	}
 	uvol.Status.Phase = crd.VolumePhaseAdopting
 
-	op.log.Info("volume adoption recorded", "volume", name, "dseq", dseq)
+	op.log.Info("volume adoption recorded", "volume", vol.Name, "dseq", dseq)
 
 	_, err = op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
 
@@ -751,16 +764,14 @@ func (op *storageOperator) prepareState(pd common.PreparedResult) error {
 func (op *storageOperator) handleVolumeGet(rw http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
 
-	name := crd.VolumeName(vars["owner"], vars["vid"])
-
-	vol, err := op.ac.AkashV2beta2().Volumes(op.ns).Get(req.Context(), name, metav1.GetOptions{})
+	vol, err := op.volume(req.Context(), vars["owner"], vars["vid"])
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			rw.WriteHeader(http.StatusNotFound)
 			return
 		}
 
-		op.log.Error("fetching volume", "name", name, "err", err)
+		op.log.Error("fetching volume", "owner", vars["owner"], "vid", vars["vid"], "err", err)
 		rw.WriteHeader(http.StatusInternalServerError)
 
 		return

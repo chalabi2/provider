@@ -99,6 +99,14 @@ func TestNewVolumeRoundTrip(t *testing.T) {
 	require.True(t, persistent)
 }
 
+func TestVolumeMatches(t *testing.T) {
+	vol := &Volume{Spec: VolumeSpec{Owner: "akash1owner", VID: "pgdata"}}
+
+	require.True(t, vol.Matches("akash1owner", "pgdata"))
+	require.False(t, vol.Matches("akash1other", "pgdata"))
+	require.False(t, vol.Matches("akash1owner", "other"))
+}
+
 func TestNewVolumeRejectsNonVolumeGroups(t *testing.T) {
 	lid := testutil.LeaseID(t)
 

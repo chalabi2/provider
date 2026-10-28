@@ -111,6 +111,13 @@ func VolumeName(owner, vid string) string {
 	return "volume-" + hex.EncodeToString(sum[:])[:volumeNameHashLen]
 }
 
+// Matches reports whether the volume is owner's vid. A name is a truncated
+// hash of owner/vid that can be made to collide, so finding a volume by name
+// alone does not prove whose it is.
+func (v *Volume) Matches(owner, vid string) bool {
+	return v.Spec.Owner == owner && v.Spec.VID == vid
+}
+
 // NewVolume builds the Volume CRD object for a won volume lease from its
 // on-chain GroupSpec. Labels (lease, component) are appended by the caller.
 func NewVolume(ns string, lid mtypes.LeaseID, gspec *dtypes.GroupSpec) (*Volume, error) {

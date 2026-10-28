@@ -239,6 +239,43 @@ func TestAttachVolumeNotFound(t *testing.T) {
 	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeNotFound)
 }
 
+// TestVolumeLookupsRefuseNameCollision: a ref whose name collides with
+// another owner's volume must not reach that volume's record.
+func TestVolumeLookupsRefuseNameCollision(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	victimLid := testutil.LeaseID(t)
+	name := crd.VolumeName(lid.Owner, testVolumeVID)
+	obj, err := kc.ac.AkashV2beta2().Volumes(kc.ns).Get(context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+	obj.Spec.Owner = victimLid.Owner
+	obj.Spec.VID = "victim-data"
+	obj.Status.AttachedLease = victimLid.String()
+	_, err = kc.ac.AkashV2beta2().Volumes(kc.ns).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	ref := testVolumeRef(lid)
+	computeLid := testutil.LeaseID(t)
+	computeLid.Owner = lid.Owner
+
+	err = kc.AttachVolume(context.Background(), computeLid, ref)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeMismatch)
+
+	_, err = kc.VolumeStatus(context.Background(), ref)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeNotFound)
+
+	// the record's own lease is attached, but through another volume's ref
+	require.NoError(t, kc.DetachVolume(context.Background(), victimLid, ref))
+
+	after, err := kc.ac.AkashV2beta2().Volumes(kc.ns).Get(context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, victimLid.String(), after.Status.AttachedLease)
+	require.Equal(t, victimLid.Owner, after.Spec.Owner)
+}
+
 func TestTeardownVolumeRetains(t *testing.T) {
 	lid := testutil.LeaseID(t)
 	kc := volumeClientForTest(t, nil, nil)

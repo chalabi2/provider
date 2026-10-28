@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	sdkmath "cosmossdk.io/math"
 	abci "github.com/cometbft/cometbft/abci/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -244,6 +247,45 @@ func TestApplyAttachDetachEvents(t *testing.T) {
 	}))
 
 	require.Equal(t, "", getOpVolume(t, s, vol.Name).Status.AttachedLease)
+}
+
+// TestVolumeNameCollisionIgnored: events and requests for a volume whose
+// name collides with another owner's record leave that record alone.
+func TestVolumeNameCollisionIgnored(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	victimLid := testutil.LeaseID(t)
+	computeLid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseAttached)
+	vol.Spec.Owner = victimLid.Owner
+	vol.Spec.VID = "victim-data"
+	vol.Status.PVName = testPV
+	vol.Status.AttachedLease = victimLid.String()
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol})
+
+	ref := dv1.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq, GSeq: lid.GSeq, Name: testVID}
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventVolumeAttached{LeaseID: computeLid, Volume: ref}))
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventVolumeDetached{
+		LeaseID: victimLid,
+		Volume:  ref,
+		Reason:  mv1.LeaseClosedReasonOwner,
+	}))
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &dv1.EventVolumeAdopted{
+		ID:      dv1.GroupID{Owner: lid.Owner, DSeq: lid.DSeq + 7, GSeq: 1},
+		Adopted: ref,
+		Vid:     testVID,
+	}))
+
+	after := getOpVolume(t, s, vol.Name)
+	require.Equal(t, vol.Spec, after.Spec)
+	require.Equal(t, vol.Status, after.Status)
+
+	req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/volume/"+lid.Owner+"/"+testVID, nil), map[string]string{"owner": lid.Owner, "vid": testVID})
+	rec := httptest.NewRecorder()
+	s.op.handleVolumeGet(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestApplyAdoptionEventMovesSpec(t *testing.T) {

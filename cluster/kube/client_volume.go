@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -128,12 +129,27 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 	}
 }
 
-func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error {
+// getVolume reads the Volume CRD of ref, refusing a record of another
+// volume that shares its name.
+func (c *client) getVolume(ctx context.Context, ref dtypes.VolumeRef) (*crd.Volume, error) {
 	name := crd.VolumeName(ref.Owner, ref.Name)
 
 	obj, err := wrapKubeCall("akash-volumes-get", func() (*crd.Volume, error) {
 		return c.ac.AkashV2beta2().Volumes(c.ns).Get(ctx, name, metav1.GetOptions{})
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !obj.Matches(ref.Owner, ref.Name) {
+		return nil, fmt.Errorf("%w: %s is %s/%s", kubeclienterrors.ErrVolumeMismatch, name, obj.Spec.Owner, obj.Spec.VID)
+	}
+
+	return obj, nil
+}
+
+func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error {
+	obj, err := c.getVolume(ctx, ref)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeNotFound, ref)
@@ -159,14 +175,10 @@ func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtype
 }
 
 func (c *client) DetachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error {
-	name := crd.VolumeName(ref.Owner, ref.Name)
-
-	obj, err := wrapKubeCall("akash-volumes-get", func() (*crd.Volume, error) {
-		return c.ac.AkashV2beta2().Volumes(c.ns).Get(ctx, name, metav1.GetOptions{})
-	})
+	obj, err := c.getVolume(ctx, ref)
 	if err != nil {
 		// Detach rides teardown paths; a missing record is not an error.
-		if kerrors.IsNotFound(err) {
+		if kerrors.IsNotFound(err) || errors.Is(err, kubeclienterrors.ErrVolumeMismatch) {
 			return nil
 		}
 		return err
@@ -238,13 +250,10 @@ func (c *client) TeardownVolume(ctx context.Context, lid mtypes.LeaseID) error {
 }
 
 func (c *client) VolumeStatus(ctx context.Context, ref dtypes.VolumeRef) (*crd.Volume, error) {
-	name := crd.VolumeName(ref.Owner, ref.Name)
-
-	obj, err := wrapKubeCall("akash-volumes-get", func() (*crd.Volume, error) {
-		return c.ac.AkashV2beta2().Volumes(c.ns).Get(ctx, name, metav1.GetOptions{})
-	})
+	obj, err := c.getVolume(ctx, ref)
 	if err != nil {
-		if kerrors.IsNotFound(err) {
+		// another volume's record is not shown to whoever asks for this one
+		if kerrors.IsNotFound(err) || errors.Is(err, kubeclienterrors.ErrVolumeMismatch) {
 			return nil, fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeNotFound, ref)
 		}
 		return nil, err
