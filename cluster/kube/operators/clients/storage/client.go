@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"cosmossdk.io/log"
@@ -82,14 +83,24 @@ func (sopc *client) Check(ctx context.Context) error {
 	return nil
 }
 
-// RetainedVolume implements the adoption bid pre-check.
-func (sopc *client) RetainedVolume(ctx context.Context, owner string, vid string) (bool, error) {
+// RetainedVolume implements the adoption bid pre-check. The chain's
+// adoption event reaches the storage operator about when the order reaches
+// the bid engine, so the volume may already be Adopting, or adopted, for
+// the very deployment asking.
+func (sopc *client) RetainedVolume(ctx context.Context, owner string, vid string, dseq uint64) (bool, error) {
 	state, found, err := sopc.volumeState(ctx, owner, vid)
 	if err != nil || !found {
 		return false, err
 	}
 
-	return state.Phase == string(crd.VolumePhaseRetained), nil
+	switch crd.VolumePhase(state.Phase) {
+	case crd.VolumePhaseRetained:
+		return true, nil
+	case crd.VolumePhaseAdopting, crd.VolumePhaseProvisioned:
+		return state.DSeq == strconv.FormatUint(dseq, 10), nil
+	default:
+		return false, nil
+	}
 }
 
 // ParkedVolume implements the attach bid pre-check. Provisioned is the

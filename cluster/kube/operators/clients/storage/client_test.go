@@ -54,11 +54,13 @@ func TestStorageClientLookups(t *testing.T) {
 	retained := crd.VolumeName(owner, "retained-vid")
 	parked := crd.VolumeName(owner, "parked-vid")
 	attached := crd.VolumeName(owner, "attached-vid")
+	adopting := crd.VolumeName(owner, "adopting-vid")
 
 	states := map[string]cstorage.VolumeState{
-		retained: {Owner: owner, VID: "retained-vid", Phase: string(crd.VolumePhaseRetained)},
-		parked:   {Owner: owner, VID: "parked-vid", Phase: string(crd.VolumePhaseProvisioned)},
+		retained: {Owner: owner, VID: "retained-vid", Phase: string(crd.VolumePhaseRetained), DSeq: "10"},
+		parked:   {Owner: owner, VID: "parked-vid", Phase: string(crd.VolumePhaseProvisioned), DSeq: "11"},
 		attached: {Owner: owner, VID: "attached-vid", Phase: string(crd.VolumePhaseAttached), AttachedLease: "some-lease"},
+		adopting: {Owner: owner, VID: "adopting-vid", Phase: string(crd.VolumePhaseAdopting), DSeq: "12"},
 	}
 
 	mux := http.NewServeMux()
@@ -82,12 +84,25 @@ func TestStorageClientLookups(t *testing.T) {
 	cl := clientForTest(t, mux)
 	ctx := context.Background()
 
-	found, err := cl.RetainedVolume(ctx, owner, "retained-vid")
+	found, err := cl.RetainedVolume(ctx, owner, "retained-vid", 99)
 	require.NoError(t, err)
 	require.True(t, found)
 
-	// parked volume is not retained
-	found, err = cl.RetainedVolume(ctx, owner, "parked-vid")
+	// parked volume of another deployment is not retained
+	found, err = cl.RetainedVolume(ctx, owner, "parked-vid", 99)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	// the operator saw the adoption first: the deployment asking adopts it
+	found, err = cl.RetainedVolume(ctx, owner, "adopting-vid", 12)
+	require.NoError(t, err)
+	require.True(t, found)
+	found, err = cl.RetainedVolume(ctx, owner, "parked-vid", 11)
+	require.NoError(t, err)
+	require.True(t, found, "a volume already handed to the deployment asking")
+
+	// but not another deployment's adoption
+	found, err = cl.RetainedVolume(ctx, owner, "adopting-vid", 13)
 	require.NoError(t, err)
 	require.False(t, found)
 

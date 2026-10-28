@@ -60,7 +60,7 @@ type fakeVolumeLookup struct {
 	parkedCalls   int
 }
 
-func (f *fakeVolumeLookup) RetainedVolume(_ context.Context, _ string, _ string) (bool, error) {
+func (f *fakeVolumeLookup) RetainedVolume(_ context.Context, _ string, _ string, _ uint64) (bool, error) {
 	f.retainedCalls++
 	return f.retained, f.err
 }

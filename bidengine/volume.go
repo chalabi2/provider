@@ -80,9 +80,9 @@ type StorageInventory interface {
 // broadcasting bids the chain would reject. The storage operator client
 // provides the implementation; a nil lookup skips the pre-checks.
 type VolumeLookup interface {
-	// RetainedVolume reports whether a local Volume CRD in the Retained
-	// phase matches owner/vid — the adoption pre-check.
-	RetainedVolume(ctx context.Context, owner string, vid string) (bool, error)
+	// RetainedVolume reports whether owner/vid is a local Volume CRD the
+	// deployment dseq may adopt — the adoption pre-check.
+	RetainedVolume(ctx context.Context, owner string, vid string, dseq uint64) (bool, error)
 	// ParkedVolume reports whether a local Volume CRD in the Parked phase
 	// matches the attach reference.
 	ParkedVolume(ctx context.Context, ref dv1.VolumeRef) (bool, error)
@@ -198,7 +198,7 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 	// local filter only — the chain gates adoption bids to the retaining
 	// provider regardless, so no lookup wired means no filter.
 	if vol := group.GroupSpec.Volume; vol.Adopt != nil && o.volumes != nil {
-		found, err := o.volumes.RetainedVolume(ctx, group.ID.Owner, vol.Vid)
+		found, err := o.volumes.RetainedVolume(ctx, group.ID.Owner, vol.Vid, group.ID.DSeq)
 		if err != nil {
 			return false, err
 		}

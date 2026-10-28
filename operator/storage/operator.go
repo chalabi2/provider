@@ -46,6 +46,7 @@ type VolumeState struct {
 	RetainedUntil string `json:"retained-until,omitempty"`
 	Access        string `json:"access,omitempty"`
 	Bucket        string `json:"bucket,omitempty"`
+	DSeq          string `json:"dseq,omitempty"`
 }
 
 type storageOperator struct {
@@ -718,6 +719,7 @@ func volumeState(vol *crd.Volume) VolumeState {
 		AttachedLease: vol.Status.AttachedLease,
 		Access:        vol.Spec.Access,
 		Bucket:        vol.Status.Bucket,
+		DSeq:          vol.Spec.GroupID.DSeq,
 	}
 
 	if vol.Status.RetainedUntil != nil {

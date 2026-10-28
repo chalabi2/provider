@@ -18,6 +18,9 @@ type VolumeState struct {
 	PVName        string `json:"pv-name,omitempty"`
 	AttachedLease string `json:"attached-lease,omitempty"`
 	RetainedUntil string `json:"retained-until,omitempty"`
+	// DSeq is the deployment the volume belongs to now, the adopting one
+	// once an adoption is recorded.
+	DSeq string `json:"dseq,omitempty"`
 }
 
 // Client is the daemon's interface to the storage operator. It satisfies
@@ -28,9 +31,10 @@ type Client interface {
 	Check(ctx context.Context) error
 	String() string
 
-	// RetainedVolume reports whether a local volume in the Retained phase
-	// matches owner/vid - the adoption bid pre-check.
-	RetainedVolume(ctx context.Context, owner string, vid string) (bool, error)
+	// RetainedVolume reports whether owner/vid is a local volume deployment
+	// dseq may adopt: Retained, or already being handed to dseq - the
+	// adoption bid pre-check.
+	RetainedVolume(ctx context.Context, owner string, vid string, dseq uint64) (bool, error)
 	// ParkedVolume reports whether a local volume in the Provisioned
 	// (parked) phase matches the attach reference.
 	ParkedVolume(ctx context.Context, ref dv1.VolumeRef) (bool, error)
