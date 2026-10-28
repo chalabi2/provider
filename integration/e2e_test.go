@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -509,6 +510,8 @@ func (s *IntegrationTestSuite) SetupSuite() {
 			WithFlag("volume-max-retention", "48h").
 			WithFlag("volume-max-replicas", "4").
 			WithFlag("storage-operator-endpoint", s.storageOperatorHost).
+			// a second provider in the same process keeps its own snapshots
+			WithFlag(pcmd.FlagVolumeReplicationDir, filepath.Join(s.network.BaseDir, "volume-replication-a")).
 			WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
 			// withdrawal is the escrow-exhaustion detector: the floor pair
 			// (1m monitor, 1m withdrawal) keeps the money path inside test

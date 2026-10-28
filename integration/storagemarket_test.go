@@ -47,17 +47,20 @@
 package integration
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -71,19 +74,15 @@ import (
 	"pkg.akt.dev/go/cli"
 	clitestutil "pkg.akt.dev/go/cli/testutil"
 	arpcclient "pkg.akt.dev/go/node/client"
-	aclient "pkg.akt.dev/go/node/client/discovery"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mtypes "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	"pkg.akt.dev/go/sdkutil"
-	atls "pkg.akt.dev/go/util/tls"
 	testnet "pkg.akt.dev/node/v2/testutil/network"
 
-	pclient "github.com/akash-network/provider/client"
 	pcmd "github.com/akash-network/provider/cmd/provider-services/cmd"
 	operatorcommon "github.com/akash-network/provider/operator/common"
-	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	ptestutil "github.com/akash-network/provider/testutil/provider"
 )
@@ -1083,6 +1082,11 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 		WithFlag("volume-max-replicas", "4").
 		WithFlag("storage-operator-endpoint", s.storageOperatorHostB).
 		WithFlag(pcmd.FlagGatewayGRPCListenAddress, s.grpcHostProviderB).
+		// provider A serves transfers on its random gateway gRPC port, not
+		// the 8444 convention; B is the only provider that reads this
+		WithFlag(pcmd.FlagVolumeTransferPort, s.grpcPortProvider()).
+		WithFlag(pcmd.FlagVolumeMigrationInterval, "2s").
+		WithFlag(pcmd.FlagVolumeReplicationDir, filepath.Join(s.network.BaseDir, "volume-replication-b")).
 		WithFlag(pcmd.FlagReclamationWindow, storageReclamationWindow.String()).
 		WithFlag(pcmd.FlagLeaseFundsMonitorInterval, "1m").
 		WithFlag(pcmd.FlagWithdrawalPeriod, "1m")
@@ -1105,10 +1109,11 @@ func (s *E2EStorageMarketMigration) setupProviderB() {
 }
 
 // TestVolumeMigration is §8.3: reclaim at provider A -> Exporting freeze
-// -> auto-re-order -> provider B wins -> full-copy over VolumeTransfer
-// (local-path file driver, mTLS x/cert identities, chain-derived
-// authorization) -> re-attach at provider B -> UUID intact on the
-// migrated volume.
+// -> A closes the lease at the deadline -> auto-re-order -> provider B wins
+// -> B's storage operator parks the volume as Importing -> B copies A's
+// final snapshot over VolumeTransfer (directory-tree driver, mTLS x/cert
+// identities, chain-derived authorization) -> parked -> re-attach at
+// provider B -> the app reads back what it wrote at provider A.
 func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 	const (
 		vid          = "e2e-migrate"
@@ -1166,11 +1171,6 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 	s.appWrite(host1, "value", testData)
 	s.Require().Equal(testData, s.appRead(host1, "value"))
 
-	// stage the UUID as the volume's image - the file driver's unit of
-	// transfer for local-path PVs (an RBD volume exports its real block
-	// image instead; that leg is validated on a Rook pair out-of-band)
-	s.Require().NoError(os.WriteFile(filepath.Join(pvPathA, "image"), []byte(testData), 0o644))
-
 	// detach at A before reclaiming
 	s.closeComputeDeployment(computeDSeq)
 	s.waitForVolume(storageManifestNS, volName, 3*time.Minute, "re-parked at A", func(v *crd.Volume) bool {
@@ -1179,28 +1179,25 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 
 	// reclaim: the tenant close of the volume LEASE routes through the
 	// reclamation window as a migration; A's CRD freezes into Exporting
-	closeVolLease := func() {
-		res, err := clitestutil.ExecCloseLease(
-			s.ctx,
-			s.cctx,
-			cli.TestFlags().
-				WithLeaseID(volLeaseA).
-				WithFrom(tenant).
-				Append(cliFlags)...,
-		)
-		s.Require().NoError(err)
-		s.Require().NoError(s.waitForBlocksCommitted(1))
-		clitestutil.ValidateTxSuccessful(s.ctx, s.T(), s.cctx, res.Bytes())
-	}
-
-	closeVolLease()
+	res, err := clitestutil.ExecCloseLease(
+		s.ctx,
+		s.cctx,
+		cli.TestFlags().
+			WithLeaseID(volLeaseA).
+			WithFrom(tenant).
+			Append(cliFlags)...,
+	)
+	s.Require().NoError(err)
+	s.Require().NoError(s.waitForBlocksCommitted(1))
+	clitestutil.ValidateTxSuccessful(s.ctx, s.T(), s.cctx, res.Bytes())
 
 	s.waitForVolume(storageManifestNS, volName, 2*time.Minute, "phase Exporting at A", func(v *crd.Volume) bool {
 		return v.Status.Phase == crd.VolumePhaseExporting
 	})
 
-	time.Sleep(storageReclamationWindow + storageReclamationFloor)
-	closeVolLease()
+	// provider A closes its own lease once the window runs out: one close
+	// from the tenant moves the volume
+	s.waitForLeaseState(volLeaseA, storageReclamationWindow+storageReclamationFloor+2*time.Minute, mtypes.LeaseClosed)
 
 	// auto-re-order: the same group re-lists; provider B wins the new
 	// order
@@ -1208,52 +1205,17 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 	s.waitForBid(volBidB)
 	s.createLease(volBidB)
 
-	// B provisions a fresh Retain PV in its own namespace
-	s.waitForVolume(storageManifestNSB, volName, 2*time.Minute, "phase Provisioned at B", func(v *crd.Volume) bool {
-		return v.Status.Phase == crd.VolumePhaseProvisioned && v.Status.PVName != ""
+	// B parks a fresh PV as Importing and copies A's final snapshot in over
+	// A's VolumeTransfer gateway, then parks it as an ordinary volume
+	s.waitForVolume(storageManifestNSB, volName, 2*time.Minute, "phase Importing at B", func(v *crd.Volume) bool {
+		return v.Spec.ImportFrom == s.addrProvider.String() && v.Status.PVName != ""
 	})
+	s.waitForVolume(storageManifestNSB, volName, 3*time.Minute, "copied in and parked at B", func(v *crd.Volume) bool {
+		return v.Status.Phase == crd.VolumePhaseProvisioned && v.Spec.ImportFrom == ""
+	})
+
 	pvPathB := s.volumePVHostPath(storageManifestNSB, volName)
-
-	// pull the full copy over A's VolumeTransfer gateway: B's x/cert
-	// identity as the client certificate, A's identity pinned, both
-	// authorizations derived from chain state
-	kpm, err := atls.NewKeyPairManager(s.cctx, s.addrProviderB)
-	s.Require().NoError(err)
-
-	_, certB, err := kpm.ReadX509KeyPair()
-	s.Require().NoError(err)
-
-	qc, err := aclient.DiscoverQueryClient(s.ctx, s.cctx)
-	s.Require().NoError(err)
-
-	transferClient, closer, err := replication.Dial(
-		s.ctx,
-		s.grpcHostProvider,
-		s.addrProvider.String(),
-		[]tls.Certificate{certB},
-		pclient.NewCertificateQuerier(qc),
-	)
-	s.Require().NoError(err)
-	defer func() { _ = closer.Close() }()
-
-	syncer := &replication.Syncer{
-		Client:    transferClient,
-		Driver:    replication.NewFileDriver(""),
-		Ref:       replication.Ref{Name: volName, Path: pvPathB},
-		Owner:     tenant,
-		Vid:       vid,
-		DSeq:      volDSeq,
-		Requester: s.addrProviderB.String(),
-		SpoolDir:  s.network.BaseDir,
-	}
-
-	applied, err := syncer.SyncOnce(s.ctx)
-	s.Require().NoError(err)
-	s.Require().NotEmpty(applied, "the first sync must land a full export")
-
-	imported, err := os.ReadFile(filepath.Join(pvPathB, "image"))
-	s.Require().NoError(err)
-	s.Require().Equal(testData, string(imported), "the UUID must arrive intact at provider B's PV")
+	s.Require().Equal(readVolumeTree(s.T(), pvPathA), readVolumeTree(s.T(), pvPathB), "B holds every file A held")
 
 	// re-attach at B: colocation now points at the volume's new provider
 	attach2SDL := s.writeSDL("attach-migrated.yaml", fmt.Sprintf(sdlComputeAttachTemplate, vid, tenant, volDSeq, host2))
@@ -1280,27 +1242,14 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 		return v.Status.Phase == crd.VolumePhaseAttached
 	})
 
-	// the compute re-attaches and runs on the migrated volume at B: a fresh
-	// write round-trips through the app on provider B's re-attached lease.
-	// We overwrite the pre-migration payload rather than expect it back - the
-	// file driver's documented unit of transfer is the single "image" file
-	// (an RBD volume exports its real block image; local-path proves the
-	// coordination and transfer plumbing, not the app's live KV store), so
-	// only the staged image survives the copy. That payload's survival is
-	// asserted directly against the migrated PV below.
-	//
-	// The e2e-test app exposes exactly one key: the literal routes
-	// /SET/value and /GET/value (github.com/akash-network/e2e-test). Any other
-	// key 404s at the app, so the liveness round-trip must use "value".
+	// the app at B reads back what it wrote at A, and keeps working on the
+	// moved volume. The e2e-test app exposes exactly one key: the literal
+	// routes /SET/value and /GET/value (github.com/akash-network/e2e-test).
+	s.Require().Equal(testData, s.appRead(host2, "value"), "the value written at provider A must survive the move")
+
 	migratedProof := uuid.New().String()
 	s.appWrite(host2, "value", migratedProof)
 	s.Require().Equal(migratedProof, s.appRead(host2, "value"), "the app must run on the migrated volume at provider B")
-
-	// and the staged UUID - the file driver's transferred payload - is
-	// intact on the volume B now serves
-	migrated, err := os.ReadFile(filepath.Join(pvPathB, "image"))
-	s.Require().NoError(err)
-	s.Require().Equal(testData, string(migrated), "the UUID must survive migration and re-attachment at provider B")
 
 	// orderly close: compute at B, then the volume (now B's lease)
 	// through its window
@@ -1309,4 +1258,56 @@ func (s *E2EStorageMarketMigration) TestVolumeMigration() {
 		return v.Status.Phase == crd.VolumePhaseProvisioned && v.Status.AttachedLease == ""
 	})
 	s.closeVolumeDeployment(volDSeq)
+}
+
+// grpcPortProvider is the port provider A serves its gateway gRPC on.
+func (s *IntegrationTestSuite) grpcPortProvider() int {
+	_, port, err := net.SplitHostPort(s.grpcHostProvider)
+	s.Require().NoError(err)
+
+	n, err := strconv.Atoi(port)
+	s.Require().NoError(err)
+
+	return n
+}
+
+// readVolumeTree returns a PV's regular files by path, and its symlinks as
+// "-> target".
+func readVolumeTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	tree := make(map[string]string)
+
+	err := filepath.WalkDir(dir, func(file string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(dir, file)
+		if err != nil {
+			return err
+		}
+
+		switch {
+		case entry.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(file)
+			if err != nil {
+				return err
+			}
+
+			tree[rel] = "-> " + target
+		case entry.Type().IsRegular():
+			content, err := os.ReadFile(file) // nolint: gosec
+			if err != nil {
+				return err
+			}
+
+			tree[rel] = string(content)
+		}
+
+		return nil
+	})
+	require.NoError(t, err)
+
+	return tree
 }
