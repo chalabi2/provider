@@ -317,6 +317,58 @@ func Test_ShouldNotBidVolumeWhenClassNotAdvertised(t *testing.T) {
 	require.False(t, shouldBid)
 }
 
+// Test_ShouldBidVolumeOnceInventoryArrives: an order evaluated before the
+// first inventory snapshot, as every order open at startup is, waits for it.
+func Test_ShouldBidVolumeOnceInventoryArrives(t *testing.T) {
+	cfg := Config{MaxGroupVolumes: constants.DefaultMaxGroupVolumes, Volumes: defaultVolumeConfig()}
+	storage := newStorageInventory()
+	order := makeShouldBidOrder(t, cfg, fixedAttrSignatureService{attrs: volumeCapabilities()}, storage, nil)
+
+	type result struct {
+		bid bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		bid, err := order.shouldBidVolume(context.Background(), volumeGroupForTest(t, volumeGroupSpec()))
+		done <- result{bid, err}
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("decided before the inventory arrived")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	storage.update(&provider.Inventory{
+		Cluster: inventoryV1.Cluster{
+			Storage: inventoryV1.ClusterStorage{
+				{
+					Quantity: inventoryV1.NewResourcePair(100*unit.Gi, 100*unit.Gi, 0, resource.DecimalSI),
+					Info:     inventoryV1.StorageInfo{Class: testVolumeClass},
+				},
+			},
+		},
+	})
+
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		require.True(t, res.bid)
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting after the inventory arrived")
+	}
+}
+
+func Test_WaitForInventoryEndsWithTheOrder(t *testing.T) {
+	order := makeShouldBidOrder(t, Config{}, fixedAttrSignatureService{}, newStorageInventory(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, order.waitForInventory(ctx), context.Canceled)
+}
+
 func Test_ShouldNotBidVolumeOverSizeCap(t *testing.T) {
 	shouldBid, err := volumeShouldBid(t, func(_ *dvbeta.GroupSpec, cfg *Config, _ *fakeVolumeLookup) {
 		cfg.Volumes.MaxSize = testVolumeSize - 1

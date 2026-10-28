@@ -88,17 +88,38 @@ type VolumeLookup interface {
 	ParkedVolume(ctx context.Context, ref dv1.VolumeRef) (bool, error)
 }
 
+// inventoryWait bounds how long a volume order waits for the first
+// inventory snapshot. Orders open when the provider starts are evaluated
+// right away, before the snapshot arrives.
+const inventoryWait = 2 * time.Minute
+
+// readyInventory is a StorageInventory that tells when its first snapshot
+// has arrived.
+type readyInventory interface {
+	Ready() <-chan struct{}
+}
+
 // storageInventory is the StorageInventory implementation fed by the
 // bidengine service from the retained inventory-status pubsub topic.
 type storageInventory struct {
 	mu    sync.RWMutex
 	avail map[string]uint64
+
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
-var _ StorageInventory = (*storageInventory)(nil)
+var (
+	_ StorageInventory = (*storageInventory)(nil)
+	_ readyInventory   = (*storageInventory)(nil)
+)
 
 func newStorageInventory() *storageInventory {
-	return &storageInventory{}
+	return &storageInventory{ready: make(chan struct{})}
+}
+
+func (si *storageInventory) Ready() <-chan struct{} {
+	return si.ready
 }
 
 func (si *storageInventory) update(inv *provider.Inventory) {
@@ -114,9 +135,10 @@ func (si *storageInventory) update(inv *provider.Inventory) {
 	}
 
 	si.mu.Lock()
-	defer si.mu.Unlock()
-
 	si.avail = avail
+	si.mu.Unlock()
+
+	si.readyOnce.Do(func() { close(si.ready) })
 }
 
 func (si *storageInventory) AvailableStorage(class string) (uint64, bool) {
@@ -163,6 +185,10 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 		return ok, err
 	}
 
+	if err := o.waitForInventory(ctx); err != nil {
+		return false, err
+	}
+
 	class, size, _ := volumeStorage(&group.GroupSpec)
 	if !gates.volumeHeadroom(class, size) {
 		return false, nil
@@ -184,6 +210,27 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 	}
 
 	return true, nil
+}
+
+// waitForInventory holds a volume order until the first inventory snapshot
+// arrives, for at most inventoryWait; past that the headroom gate declines.
+func (o *order) waitForInventory(ctx context.Context) error {
+	ready, ok := o.storage.(readyInventory)
+	if !ok {
+		return nil
+	}
+
+	timer := time.NewTimer(inventoryWait)
+	defer timer.Stop()
+
+	select {
+	case <-ready.Ready():
+	case <-timer.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	return nil
 }
 
 // volumeTerms runs the shouldBidVolume gates that do not depend on live
