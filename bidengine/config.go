@@ -10,12 +10,15 @@ import (
 // Config represents the configuration parameters for the bid engine.
 // It controls pricing, deposits, timeouts and provider capabilities and attributes
 type Config struct {
-	PricingStrategy   BidPricingStrategy
-	Deposit           sdk.Coin
-	BidTimeout        time.Duration
-	Attributes        atttypes.Attributes
-	MaxGroupVolumes   int
-	ReclamationWindow *time.Duration
+	PricingStrategy BidPricingStrategy
+	Deposit         sdk.Coin
+	BidTimeout      time.Duration
+	// VolumeMoveBidTimeout is how long a bid stays open on a volume order
+	// re-listed by a move or an eviction.
+	VolumeMoveBidTimeout time.Duration
+	Attributes           atttypes.Attributes
+	MaxGroupVolumes      int
+	ReclamationWindow    *time.Duration
 
 	// Volumes caps bidding on storage-only (volume) orders. The zero value
 	// (no classes) disables volume bidding.

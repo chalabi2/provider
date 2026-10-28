@@ -152,13 +152,22 @@ func newOrderInternal(svc *service, oid mtypes.OrderID, cfg Config, pass Provide
 
 var matchBidNotFound = regexp.MustCompile("^.+bid not found.+$")
 
-func (o *order) bidTimeoutEnabled() bool {
-	return o.cfg.BidTimeout > time.Duration(0)
+// bidTimeoutOf is how long this provider's bid on the order stays open. A
+// volume order re-listed by a move or an eviction (any after the first)
+// keeps it for VolumeMoveBidTimeout: the tenant picks the volume's next
+// provider only once the reclamation window has run, and a bid that timed
+// out can never be placed on the order again.
+func (o *order) bidTimeoutOf(group *dtypes.Group) time.Duration {
+	if group != nil && group.GroupSpec.Volume != nil && o.orderID.OSeq > 1 {
+		return o.cfg.VolumeMoveBidTimeout
+	}
+
+	return o.cfg.BidTimeout
 }
 
-func (o *order) getBidTimeout() <-chan time.Time {
-	if o.bidTimeoutEnabled() {
-		return time.After(o.cfg.BidTimeout)
+func (o *order) getBidTimeout(group *dtypes.Group) <-chan time.Time {
+	if timeout := o.bidTimeoutOf(group); timeout > 0 {
+		return time.After(timeout)
 	}
 
 	return nil
@@ -169,8 +178,9 @@ func (o *order) bidID() mtypes.BidID {
 	return mtypes.MakeBidID(o.orderID, o.session.Provider().Address())
 }
 
-func (o *order) isStaleBid(bid mvbeta.Bid) bool {
-	if !o.bidTimeoutEnabled() {
+func (o *order) isStaleBid(bid mvbeta.Bid, group *dtypes.Group) bool {
+	timeout := o.bidTimeoutOf(group)
+	if timeout <= 0 {
 		return false
 	}
 
@@ -181,7 +191,7 @@ func (o *order) isStaleBid(bid mvbeta.Bid) bool {
 	blockAge := createdAtBlock - o.session.CreatedAtBlockHeight()
 	const minTimePerBlock = 5 * time.Second
 	atLeastThisOld := time.Duration(blockAge) * minTimePerBlock
-	return atLeastThisOld > o.cfg.BidTimeout
+	return atLeastThisOld > timeout
 }
 
 func (o *order) run(checkForExistingBid bool) {
@@ -208,6 +218,9 @@ func (o *order) run(checkForExistingBid bool) {
 
 		group       *dtypes.Group
 		reservation ctypes.Reservation
+		// existingBid is this provider's open bid found on the order; how
+		// long it may stay open depends on the group
+		existingBid *mvbeta.Bid
 
 		won bool
 		msg *mvbeta.MsgCreateBid
@@ -265,13 +278,7 @@ loop:
 					break loop
 				}
 				bidPlaced = true
-
-				if o.isStaleBid(bid) {
-					blog.Info("found expired bid", "block_height", bid.GetCreatedAt())
-					break loop
-				}
-
-				bidTimeout = o.getBidTimeout()
+				existingBid = &bid
 			}
 			groupch = storedGroupCh // Allow getting the group details result now
 			storedGroupCh = nil
@@ -365,6 +372,15 @@ loop:
 
 			res := result.Value().(dtypes.Group)
 			group = &res
+
+			if existingBid != nil {
+				if o.isStaleBid(*existingBid, group) {
+					o.log.Info("found expired bid", "bid", o.bidID(), "block_height", existingBid.GetCreatedAt())
+					break loop
+				}
+
+				bidTimeout = o.getBidTimeout(group)
+			}
 
 			shouldBidCh = runner.Do(func() runner.Result {
 				// storage-only (volume) groups ride their own gate set
@@ -485,7 +501,7 @@ loop:
 			// Fulfillment placed.
 			bidPlaced = true
 
-			bidTimeout = o.getBidTimeout()
+			bidTimeout = o.getBidTimeout(group)
 		case <-bidTimeout:
 			// The bid was not acted upon (e.g. lease created or deployment closed) so close it now
 			o.log.Info("bid timeout, closing bid")

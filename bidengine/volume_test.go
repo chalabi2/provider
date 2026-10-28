@@ -578,10 +578,24 @@ func makeVolumeOrderForTest(
 ) (*order, orderTestScaffold, <-chan int) {
 	t.Helper()
 
+	return makeVolumeOrderForTestWith(t, checkForExistingBid, bidState, 1356326, nil)
+}
+
+// makeVolumeOrderForTestWith builds a volume order of sequence oseq, with
+// configure adjusting the bid engine config.
+func makeVolumeOrderForTestWith(
+	t *testing.T,
+	checkForExistingBid bool,
+	bidState mvbeta.Bid_State,
+	oseq uint32,
+	configure func(*Config),
+) (*order, orderTestScaffold, <-chan int) {
+	t.Helper()
+
 	var scaffold orderTestScaffold
 	scaffold.deploymentID = testutil.DeploymentID(t)
 	scaffold.groupID = dv1.MakeGroupID(scaffold.deploymentID, 1)
-	scaffold.orderID = mtypes.MakeOrderID(scaffold.groupID, 1356326)
+	scaffold.orderID = mtypes.MakeOrderID(scaffold.groupID, oseq)
 
 	myLog := testutil.Logger(t)
 
@@ -607,6 +621,10 @@ func makeVolumeOrderForTest(
 		Deposit:         mvbeta.DefaultBidMinDeposit,
 		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
 		Volumes:         defaultVolumeConfig(),
+	}
+
+	if configure != nil {
+		configure(&cfg)
 	}
 
 	ctx := context.Background()
@@ -766,4 +784,64 @@ func Test_ShouldNotBidVolumeOrderWhenAlreadySet(t *testing.T) {
 	// The only broadcast is the close of the recovered bid
 	closeBid := requireMsgType[*mvbeta.MsgCloseBid](t, broadcast)
 	require.Equal(t, closeBid.ID, *scaffold.bidID)
+}
+
+func Test_RelistedVolumeBidOutlivesTheBidTimeout(t *testing.T) {
+	order, scaffold, _ := makeVolumeOrderForTestWith(t, false, mvbeta.BidStateInvalid, 2, func(cfg *Config) {
+		cfg.BidTimeout = 100 * time.Millisecond
+		cfg.VolumeMoveBidTimeout = time.Hour
+	})
+
+	_ = requireMsgType[*mvbeta.MsgCreateBid](t, testutil.ChannelWaitForValue(t, scaffold.broadcasts))
+
+	select {
+	case broadcast := <-scaffold.broadcasts:
+		t.Fatalf("the bid on a moved volume closed after the compute bid timeout: %v", broadcast)
+	case <-time.After(time.Second):
+	}
+
+	order.lc.Shutdown(nil)
+	<-order.lc.Done()
+}
+
+func Test_RelistedVolumeBidClosesAfterTheMoveBidTimeout(t *testing.T) {
+	order, scaffold, _ := makeVolumeOrderForTestWith(t, false, mvbeta.BidStateInvalid, 2, func(cfg *Config) {
+		cfg.BidTimeout = time.Hour
+		cfg.VolumeMoveBidTimeout = 100 * time.Millisecond
+	})
+
+	_ = requireMsgType[*mvbeta.MsgCreateBid](t, testutil.ChannelWaitForValue(t, scaffold.broadcasts))
+	_ = requireMsgType[*mvbeta.MsgCloseBid](t, testutil.ChannelWaitForValue(t, scaffold.broadcasts))
+
+	<-order.lc.Done()
+}
+
+func Test_FirstVolumeOrderBidTakesTheBidTimeout(t *testing.T) {
+	order, scaffold, _ := makeVolumeOrderForTestWith(t, false, mvbeta.BidStateInvalid, 1, func(cfg *Config) {
+		cfg.BidTimeout = 100 * time.Millisecond
+		cfg.VolumeMoveBidTimeout = time.Hour
+	})
+
+	_ = requireMsgType[*mvbeta.MsgCreateBid](t, testutil.ChannelWaitForValue(t, scaffold.broadcasts))
+	_ = requireMsgType[*mvbeta.MsgCloseBid](t, testutil.ChannelWaitForValue(t, scaffold.broadcasts))
+
+	<-order.lc.Done()
+}
+
+func Test_RelistedVolumeBidFoundAfterRestartKeepsTheMoveBidTimeout(t *testing.T) {
+	order, scaffold, reservationFulfilledNotify := makeVolumeOrderForTestWith(t, true, mvbeta.BidOpen, 2, func(cfg *Config) {
+		cfg.BidTimeout = time.Nanosecond
+		cfg.VolumeMoveBidTimeout = time.Hour
+	})
+
+	testutil.ChannelWaitForValue(t, reservationFulfilledNotify)
+
+	select {
+	case broadcast := <-scaffold.broadcasts:
+		t.Fatalf("an open bid on a moved volume took the compute bid timeout: %v", broadcast)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	order.lc.Shutdown(nil)
+	<-order.lc.Done()
 }

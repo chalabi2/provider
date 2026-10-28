@@ -88,13 +88,14 @@ func NewService(ctx context.Context,
 	}
 
 	bidengineCfg := bidengine.Config{
-		PricingStrategy:   cfg.BidPricingStrategy,
-		Deposit:           cfg.BidDeposit,
-		BidTimeout:        cfg.BidTimeout,
-		Attributes:        cfg.Attributes,
-		MaxGroupVolumes:   cfg.MaxGroupVolumes,
-		ReclamationWindow: cfg.ReclamationWindow,
-		Volumes:           cfg.Volumes,
+		PricingStrategy:      cfg.BidPricingStrategy,
+		Deposit:              cfg.BidDeposit,
+		BidTimeout:           cfg.BidTimeout,
+		VolumeMoveBidTimeout: cfg.VolumeMoveBidTimeout,
+		Attributes:           cfg.Attributes,
+		MaxGroupVolumes:      cfg.MaxGroupVolumes,
+		ReclamationWindow:    cfg.ReclamationWindow,
+		Volumes:              cfg.Volumes,
 	}
 
 	// the storage operator client answers the local Volume CRD pre-checks

@@ -107,6 +107,7 @@ const (
 	FlagAuthPem                          = "auth-pem"
 	FlagDeploymentRuntimeClass           = "deployment-runtime-class"
 	FlagBidTimeout                       = "bid-timeout"
+	FlagVolumeMoveBidTimeout             = "volume-move-bid-timeout"
 	FlagReclamationWindow                = "reclamation-window"
 	FlagReclamationRPCTimeout            = "reclamation-rpc-timeout"
 	FlagReclamationCloseRetryInterval    = "reclamation-close-retry-interval"
@@ -691,6 +692,7 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	config.DeploymentIngressStaticHosts = deploymentIngressStaticHosts
 	config.DeploymentIngressDomain = deploymentIngressDomain
 	config.BidTimeout = bidTimeout
+	config.VolumeMoveBidTimeout = viper.GetDuration(FlagVolumeMoveBidTimeout)
 	config.ManifestTimeout = manifestTimeout
 	if broadcastTimeout <= 0 {
 		logger.Warn("tx-broadcast-timeout must be positive, using default", "invalid", broadcastTimeout, "default", config.BroadcastTimeout)
