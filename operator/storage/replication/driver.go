@@ -17,9 +17,10 @@ import (
 
 const (
 	// DefaultChunkSize is the export stream chunk size. Small enough to
-	// keep per-chunk sha256 verification cheap to retry, large enough to
-	// amortize the gRPC framing.
-	DefaultChunkSize = 4 << 20
+	// keep per-chunk sha256 verification cheap to retry and, framed with
+	// its offset and digest, to fit well under the 4 MiB a gRPC client
+	// accepts by default; large enough to amortize the gRPC framing.
+	DefaultChunkSize = 1 << 20
 
 	// DriverStreamExport is the default, required driver: snapshot-based
 	// stream export over VolumeTransfer. No Ceph cluster peering, no
