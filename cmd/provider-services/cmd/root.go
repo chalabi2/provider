@@ -59,6 +59,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(leaseLogsCmd())
 	cmd.AddCommand(leaseAttestationCmd())
 	cmd.AddCommand(serviceStatusCmd())
+	cmd.AddCommand(bucketCmd())
 	cmd.AddCommand(RunCmd())
 	cmd.AddCommand(LeaseShellCmd())
 	cmd.AddCommand(clusterNSCmd())
