@@ -247,8 +247,18 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.Flags().Int(FlagVolumeTransferPort, 8444, "port other providers serve volume transfers on, at the host of their host URI (their gateway gRPC port)")
+	if err := viper.BindPFlag(FlagVolumeTransferPort, cmd.Flags().Lookup(FlagVolumeTransferPort)); err != nil {
+		return err
+	}
+
 	cmd.Flags().Duration(FlagVolumeMoveBidTimeout, 7*24*time.Hour, "time a bid stays open on a volume order re-listed by a move or an eviction; the tenant picks the next provider once the reclamation window has run, and a bid that timed out cannot be placed again")
 	if err := viper.BindPFlag(FlagVolumeMoveBidTimeout, cmd.Flags().Lookup(FlagVolumeMoveBidTimeout)); err != nil {
+		return err
+	}
+
+	cmd.Flags().Duration(FlagVolumeMigrationInterval, time.Minute, "period between the rounds a volume moved here is copied in with")
+	if err := viper.BindPFlag(FlagVolumeMigrationInterval, cmd.Flags().Lookup(FlagVolumeMigrationInterval)); err != nil {
 		return err
 	}
 
