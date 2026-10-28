@@ -125,6 +125,8 @@ func NewService(ctx context.Context,
 		return nil, err
 	}
 
+	vrSvc := newVolumeReclaimer(ctx, session, cclient)
+
 	manifestConfig := manifest.ServiceConfig{
 		HTTPServicesRequireAtLeastOneHost: !cfg.DeploymentIngressStaticHosts,
 		ManifestTimeout:                   cfg.ManifestTimeout,
@@ -155,6 +157,7 @@ func NewService(ctx context.Context,
 		cancel:    cancel,
 		bc:        bcSvc,
 		vp:        vpSvc,
+		vr:        vrSvc,
 		lc:        lifecycle.New(),
 		config:    cfg,
 	}
@@ -178,6 +181,7 @@ type service struct {
 	manifest  manifest.Service
 	bc        *balanceChecker
 	vp        *volumeProvisioner
+	vr        *volumeReclaimer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -292,6 +296,7 @@ func (s *service) run() {
 	<-s.manifest.Done()
 	<-s.bc.lc.Done()
 	<-s.vp.lc.Done()
+	<-s.vr.lc.Done()
 
 	if err := s.bc.Close(); err != nil {
 		s.session.Log().Error("balance checker had error", "err", err)
@@ -299,6 +304,10 @@ func (s *service) run() {
 
 	if err := s.vp.Close(); err != nil {
 		s.session.Log().Error("volume provisioner had error", "err", err)
+	}
+
+	if err := s.vr.Close(); err != nil {
+		s.session.Log().Error("volume reclaimer had error", "err", err)
 	}
 
 	s.session.Log().Info("shutdown complete")
