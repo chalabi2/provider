@@ -450,6 +450,7 @@ type integrationMocks struct {
 	pmocks         *providermocks.QueryClient
 	hostnameClient *clmocks.HostnameServiceClient
 	clusterService *pcmock.Service
+	buckets        *bucketGateway
 }
 
 func createMocks() integrationMocks {
@@ -523,7 +524,7 @@ func withServer(
 ) {
 	addr := sdk.AccAddress(keys[0].PubKey().Address())
 
-	router := newRouter(testutil.Logger(t), addr, pclient, map[interface{}]interface{}{})
+	router := newRouter(testutil.Logger(t), addr, pclient, map[interface{}]interface{}{}, mocks.buckets)
 
 	pstorage, err := memory.NewMemory()
 	require.NoError(t, err)

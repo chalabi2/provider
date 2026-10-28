@@ -19,6 +19,7 @@ import (
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 
+	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/cluster/kube/builder"
 	clusterutil "github.com/akash-network/provider/cluster/util"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
@@ -51,6 +52,9 @@ type reconciler struct {
 	chain ChainQuery
 	log   log.Logger
 	now   func() time.Time
+
+	// buckets serves bucket volumes; nil when the provider serves none
+	buckets bucket.Backend
 
 	// nodeHint annotates the initial provisioning claim with
 	// volume.kubernetes.io/selected-node. Node-constrained provisioners
@@ -116,6 +120,10 @@ func (r *reconciler) hintNode(ctx context.Context, class string) (string, error)
 
 func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 	vol = vol.DeepCopy()
+
+	if vol.IsBucket() {
+		return r.reconcileBucket(ctx, vol)
+	}
 
 	// the single destruction path: a positive chain-computable deadline,
 	// never EventLeaseClosed inference
@@ -516,6 +524,10 @@ func (r *reconciler) gc(ctx context.Context, vol *crd.Volume) error {
 
 	r.log.Info("volume released", "volume", vol.Name, "pv", vol.Status.PVName)
 
+	return r.deleteVolume(ctx, vol)
+}
+
+func (r *reconciler) deleteVolume(ctx context.Context, vol *crd.Volume) error {
 	err := r.ac.AkashV2beta2().Volumes(r.ns).Delete(ctx, vol.Name, metav1.DeleteOptions{})
 	if err != nil && !kerrors.IsNotFound(err) {
 		return err
@@ -607,10 +619,17 @@ func (r *reconciler) deletePVC(ctx context.Context, ns, name string) error {
 	return nil
 }
 
+// updateStatus writes the volume and takes the stored copy back, so a
+// second write in the same pass carries the current resource version.
 func (r *reconciler) updateStatus(ctx context.Context, vol *crd.Volume) error {
-	_, err := r.ac.AkashV2beta2().Volumes(r.ns).Update(ctx, vol, metav1.UpdateOptions{})
+	updated, err := r.ac.AkashV2beta2().Volumes(r.ns).Update(ctx, vol, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
 
-	return err
+	*vol = *updated
+
+	return nil
 }
 
 func claimRefIs(pv *corev1.PersistentVolume, ns, name string) bool {

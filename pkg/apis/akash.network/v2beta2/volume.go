@@ -88,6 +88,9 @@ type VolumeSpec struct {
 	Retention string `json:"retention"`
 	// LeaseID is the volume's own (storage) lease.
 	LeaseID LeaseID `json:"leaseId"`
+	// Access is how deployments reach the data: "bucket" for an S3 bucket
+	// served over the network, empty for a mounted volume.
+	Access string `json:"access,omitempty"`
 }
 
 // VolumeStatus is the storage operator's reconciliation record.
@@ -100,6 +103,13 @@ type VolumeStatus struct {
 	// RetainedUntil = closedAt + retention; the GC deadline. The single
 	// destruction path triggers only past this positive deadline.
 	RetainedUntil *metav1.Time `json:"retainedUntil,omitempty"`
+	// Bucket is the provisioned bucket of a bucket volume.
+	Bucket string `json:"bucket,omitempty"`
+	// BucketDSeq is the deployment the bucket's keys were issued under; a
+	// spec naming another one is an adoption in flight.
+	BucketDSeq string `json:"bucketDSeq,omitempty"`
+	// BucketSize is the quota last applied to the bucket, in bytes.
+	BucketSize string `json:"bucketSize,omitempty"`
 }
 
 // VolumeName derives the deterministic CRD object name for a volume:
@@ -109,6 +119,12 @@ type VolumeStatus struct {
 func VolumeName(owner, vid string) string {
 	sum := sha256.Sum256([]byte(owner + "/" + vid))
 	return "volume-" + hex.EncodeToString(sum[:])[:volumeNameHashLen]
+}
+
+// IsBucket reports whether the volume is an S3 bucket rather than a
+// mounted volume.
+func (v *Volume) IsBucket() bool {
+	return v.Spec.Access == dv1.VolumeAccessBucket.String()
 }
 
 // Matches reports whether the volume is owner's vid. A name is a truncated
@@ -136,6 +152,11 @@ func NewVolume(ns string, lid mtypes.LeaseID, gspec *dtypes.GroupSpec) (*Volume,
 		class = val
 	}
 
+	var access string
+	if gspec.Volume.IsBucket() {
+		access = dv1.VolumeAccessBucket.String()
+	}
+
 	return &Volume{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Volume",
@@ -157,6 +178,7 @@ func NewVolume(ns string, lid mtypes.LeaseID, gspec *dtypes.GroupSpec) (*Volume,
 			Reclaim:   gspec.Volume.Reclaim.String(),
 			Retention: gspec.Volume.Retention.String(),
 			LeaseID:   LeaseIDFromAkash(lid),
+			Access:    access,
 		},
 		Status: VolumeStatus{
 			Phase: VolumePhasePending,
@@ -186,14 +208,20 @@ func (v *Volume) FromCRD() (mtypes.LeaseID, dtypes.GroupSpec, error) {
 
 	reclaim := dv1.VolumePolicy_ReclaimPolicy(dv1.VolumePolicy_ReclaimPolicy_value[v.Spec.Reclaim])
 
+	policy := &dv1.VolumePolicy{
+		Vid:            v.Spec.VID,
+		Reclaim:        reclaim,
+		Retention:      retention,
+		MaxAttachments: 1,
+	}
+	if v.IsBucket() {
+		policy.Access = dv1.VolumeAccessBucket
+		policy.MaxAttachments = 0
+	}
+
 	gspec := dtypes.GroupSpec{
-		Name: v.Spec.VID,
-		Volume: &dv1.VolumePolicy{
-			Vid:            v.Spec.VID,
-			Reclaim:        reclaim,
-			Retention:      retention,
-			MaxAttachments: 1,
-		},
+		Name:   v.Spec.VID,
+		Volume: policy,
 		Resources: dtypes.ResourceUnits{
 			{
 				Resources: rtypes.Resources{

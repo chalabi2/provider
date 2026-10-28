@@ -99,6 +99,37 @@ func TestNewVolumeRoundTrip(t *testing.T) {
 	require.True(t, persistent)
 }
 
+func TestNewVolumeBucketRoundTrip(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	gspec := testVolumeGroupSpec("assets", 100)
+	gspec.Volume.Access = dv1.VolumeAccessBucket
+	gspec.Volume.MaxAttachments = 0
+
+	vol, err := NewVolume("akash-services", lid, gspec)
+	require.NoError(t, err)
+	require.Equal(t, "bucket", vol.Spec.Access)
+	require.True(t, vol.IsBucket())
+
+	_, rspec, err := vol.FromCRD()
+	require.NoError(t, err)
+	require.Equal(t, dv1.VolumeAccessBucket, rspec.Volume.Access)
+	require.Equal(t, uint32(0), rspec.Volume.MaxAttachments)
+}
+
+func TestNewVolumeMountHasNoAccess(t *testing.T) {
+	vol, err := NewVolume("akash-services", testutil.LeaseID(t), testVolumeGroupSpec("myapp-pgdata", 100))
+	require.NoError(t, err)
+
+	// mount volumes keep the record they had before buckets existed
+	require.Equal(t, "", vol.Spec.Access)
+	require.False(t, vol.IsBucket())
+
+	_, rspec, err := vol.FromCRD()
+	require.NoError(t, err)
+	require.Equal(t, dv1.VolumeAccessMount, rspec.Volume.Access)
+	require.Equal(t, uint32(1), rspec.Volume.MaxAttachments)
+}
+
 func TestVolumeMatches(t *testing.T) {
 	vol := &Volume{Spec: VolumeSpec{Owner: "akash1owner", VID: "pgdata"}}
 

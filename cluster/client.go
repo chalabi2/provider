@@ -82,6 +82,8 @@ type Client interface {
 	TeardownVolume(ctx context.Context, lid mtypes.LeaseID) error
 	// VolumeStatus returns the Volume CRD the reference addresses.
 	VolumeStatus(ctx context.Context, ref dtypes.VolumeRef) (*crd.Volume, error)
+	// LeaseVolume returns the Volume CRD whose own lease is lid.
+	LeaseVolume(ctx context.Context, lid mtypes.LeaseID) (*crd.Volume, error)
 	// DeployedVolumes lists the volumes recorded in the cluster - the
 	// restart rebuild source for durable reservations.
 	DeployedVolumes(ctx context.Context) ([]ctypes.VolumeDeployment, error)
@@ -337,6 +339,10 @@ func (c *nullClient) TeardownVolume(_ context.Context, _ mtypes.LeaseID) error {
 }
 
 func (c *nullClient) VolumeStatus(_ context.Context, _ dtypes.VolumeRef) (*crd.Volume, error) {
+	return nil, errNotImplemented
+}
+
+func (c *nullClient) LeaseVolume(_ context.Context, _ mtypes.LeaseID) (*crd.Volume, error) {
 	return nil, errNotImplemented
 }
 

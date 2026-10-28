@@ -25,6 +25,7 @@ import (
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 
+	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/operator/common"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	akashclientset "github.com/akash-network/provider/pkg/client/clientset/versioned"
@@ -43,6 +44,8 @@ type VolumeState struct {
 	PVName        string `json:"pv-name,omitempty"`
 	AttachedLease string `json:"attached-lease,omitempty"`
 	RetainedUntil string `json:"retained-until,omitempty"`
+	Access        string `json:"access,omitempty"`
+	Bucket        string `json:"bucket,omitempty"`
 }
 
 type storageOperator struct {
@@ -60,7 +63,7 @@ type storageOperator struct {
 	flagState  common.PrepareFlagFn
 }
 
-func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string, cfg common.OperatorConfig, chain ChainClient, resync time.Duration, nodeHint bool) (*storageOperator, error) {
+func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string, cfg common.OperatorConfig, chain ChainClient, resync time.Duration, nodeHint bool, buckets bucket.Backend) (*storageOperator, error) {
 	kc, err := fromctx.KubeClientFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -91,6 +94,7 @@ func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string
 	}
 
 	op.reconciler.nodeHint = nodeHint
+	op.reconciler.buckets = buckets
 
 	op.flagState = op.server.AddPreparedEndpoint("/state", op.prepareState)
 
@@ -712,6 +716,8 @@ func volumeState(vol *crd.Volume) VolumeState {
 		Phase:         string(vol.Status.Phase),
 		PVName:        vol.Status.PVName,
 		AttachedLease: vol.Status.AttachedLease,
+		Access:        vol.Spec.Access,
+		Bucket:        vol.Status.Bucket,
 	}
 
 	if vol.Status.RetainedUntil != nil {

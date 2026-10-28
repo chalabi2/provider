@@ -246,6 +246,61 @@ func Test_ShouldNotBidVolumeWhenClassNotConfigured(t *testing.T) {
 	require.False(t, shouldBid)
 }
 
+func bucketOrder(gspec *dvbeta.GroupSpec) {
+	gspec.Volume.Access = dv1.VolumeAccessBucket
+	gspec.Volume.MaxAttachments = 0
+}
+
+func Test_ShouldBidBucket(t *testing.T) {
+	shouldBid, err := volumeShouldBid(t, func(gspec *dvbeta.GroupSpec, cfg *Config, _ *fakeVolumeLookup) {
+		bucketOrder(gspec)
+		cfg.Volumes.Classes = nil // no -retain class needed for buckets
+		cfg.Volumes.BucketClasses = []string{testVolumeClass}
+	})
+	require.NoError(t, err)
+	require.True(t, shouldBid)
+}
+
+func Test_ShouldNotBidBucketWithoutBuckets(t *testing.T) {
+	for name, classes := range map[string][]string{
+		"buckets not served":       nil,
+		"class not behind buckets": {"beta3"},
+	} {
+		shouldBid, err := volumeShouldBid(t, func(gspec *dvbeta.GroupSpec, cfg *Config, _ *fakeVolumeLookup) {
+			bucketOrder(gspec)
+			cfg.Volumes.BucketClasses = classes // the class stays configured for mounted volumes
+		})
+		require.NoError(t, err, name)
+		require.False(t, shouldBid, name)
+	}
+}
+
+func Test_ShouldNotBidVolumeOnBucketClassAlone(t *testing.T) {
+	shouldBid, err := volumeShouldBid(t, func(_ *dvbeta.GroupSpec, cfg *Config, _ *fakeVolumeLookup) {
+		cfg.Volumes.Classes = nil
+		cfg.Volumes.BucketClasses = []string{testVolumeClass}
+	})
+	require.NoError(t, err)
+	require.False(t, shouldBid)
+}
+
+func Test_ShouldNotBidBucketWithoutHeadroom(t *testing.T) {
+	gspec := volumeGroupSpec()
+	bucketOrder(&gspec)
+
+	cfg := Config{
+		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
+		Volumes:         VolumeConfig{BucketClasses: []string{testVolumeClass}, MaxRetention: 7 * 24 * time.Hour},
+	}
+
+	storage := fakeStorageInventory{testVolumeClass: testVolumeSize - 1}
+	order := makeShouldBidOrder(t, cfg, fixedAttrSignatureService{attrs: volumeCapabilities()}, storage, nil)
+
+	shouldBid, err := order.shouldBidVolume(context.Background(), volumeGroupForTest(t, gspec))
+	require.NoError(t, err)
+	require.False(t, shouldBid)
+}
+
 func Test_ShouldNotBidVolumeWhenClassNotAdvertised(t *testing.T) {
 	gspec := volumeGroupSpec()
 	cfg := Config{

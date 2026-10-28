@@ -19,6 +19,7 @@ import (
 	"pkg.akt.dev/go/sdkutil"
 	"pkg.akt.dev/go/util/ctxlog"
 
+	"github.com/akash-network/provider/bucket"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
 	"github.com/akash-network/provider/operator/common"
 	"github.com/akash-network/provider/tools/fromctx"
@@ -76,7 +77,15 @@ func Cmd() *cobra.Command {
 
 			group := fromctx.MustErrGroupFromCtx(ctx)
 
-			op, err := newStorageOperator(ctx, logger, ns, volNS, opcfg, chain, resync, nodeHint)
+			var buckets bucket.Backend
+			if bcfg := bucket.ConfigFromViper(); bcfg.Enabled() {
+				if buckets, err = bucket.New(bcfg); err != nil {
+					return err
+				}
+				logger.Info("serving bucket volumes", "backend", bcfg.Backend, "admin_endpoint", bcfg.AdminEndpoint)
+			}
+
+			op, err := newStorageOperator(ctx, logger, ns, volNS, opcfg, chain, resync, nodeHint, buckets)
 			if err != nil {
 				return err
 			}
@@ -129,6 +138,10 @@ func Cmd() *cobra.Command {
 
 	cmd.Flags().Bool(FlagProvisionNodeHint, false, "annotate provisioning claims with the selected node (required for node-constrained provisioners like local-path; leave off for Ceph RBD)")
 	if err := viper.BindPFlag(FlagProvisionNodeHint, cmd.Flags().Lookup(FlagProvisionNodeHint)); err != nil {
+		panic(err)
+	}
+
+	if err := bucket.AddFlags(cmd); err != nil {
 		panic(err)
 	}
 

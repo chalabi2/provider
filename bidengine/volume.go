@@ -32,11 +32,20 @@ type VolumeConfig struct {
 	// a bound claim in place. A volume of any other class is held to its size:
 	// accepting its growth would bill the tenant for space the claim never gets.
 	GrowableClasses []string
+	// BucketClasses lists the storage classes whose capacity backs bucket
+	// volumes, served from the provider's S3 server. Empty declines every
+	// bucket order.
+	BucketClasses []string
 }
 
 // ClassEnabled reports whether the class is configured for volume bidding.
 func (c VolumeConfig) ClassEnabled(class string) bool {
 	return containsClass(c.Classes, class)
+}
+
+// BucketClassEnabled reports whether the class is configured for buckets.
+func (c VolumeConfig) BucketClassEnabled(class string) bool {
+	return containsClass(c.BucketClasses, class)
 }
 
 // ClassGrowable reports whether volumes of the class can grow in place.
@@ -227,9 +236,16 @@ func (g bidGates) volumeTerms(group *dtypes.Group) (bool, error) {
 		return false, nil
 	}
 
-	// participation knob: the class must be configured for volume bidding,
-	// which asserts the matching -retain StorageClass is installed
-	if !g.cfg.Volumes.ClassEnabled(class) {
+	// participation knob: a bucket needs the provider's S3 server, with the
+	// class naming the capacity behind it; a mounted volume needs the class
+	// configured for volume bidding, which asserts the matching -retain
+	// StorageClass is installed
+	if vol.IsBucket() {
+		if !g.cfg.Volumes.BucketClassEnabled(class) {
+			g.log.Debug("unable to fulfill: storage class not configured for buckets", "class", class)
+			return false, nil
+		}
+	} else if !g.cfg.Volumes.ClassEnabled(class) {
 		g.log.Debug("unable to fulfill: storage class not configured for volumes", "class", class)
 		return false, nil
 	}

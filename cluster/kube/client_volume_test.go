@@ -276,6 +276,26 @@ func TestVolumeLookupsRefuseNameCollision(t *testing.T) {
 	require.Equal(t, victimLid.Owner, after.Spec.Owner)
 }
 
+func TestLeaseVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	kc := volumeClientForTest(t, nil, nil)
+
+	_, err := kc.LeaseVolume(context.Background(), lid)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeNotFound)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)))
+
+	vol, err := kc.LeaseVolume(context.Background(), lid)
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumeName(lid.Owner, testVolumeVID), vol.Name)
+
+	// another lease of the same deployment is not this volume's lease
+	other := lid
+	other.OSeq++
+	_, err = kc.LeaseVolume(context.Background(), other)
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeNotFound)
+}
+
 func TestTeardownVolumeRetains(t *testing.T) {
 	lid := testutil.LeaseID(t)
 	kc := volumeClientForTest(t, nil, nil)

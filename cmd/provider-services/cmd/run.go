@@ -47,6 +47,7 @@ import (
 
 	"github.com/akash-network/provider"
 	"github.com/akash-network/provider/bidengine"
+	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/cluster"
 	"github.com/akash-network/provider/cluster/kube"
 	"github.com/akash-network/provider/cluster/kube/builder"
@@ -715,6 +716,20 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 		GrowableClasses: viper.GetStringSlice(FlagVolumeGrowableClasses),
 	}
+
+	// buckets are served only with a backend configured; without one the
+	// bid engine declines every bucket order
+	bucketCfg := bucket.ConfigFromViper()
+	var buckets bucket.Backend
+	if bucketCfg.Enabled() {
+		if buckets, err = bucket.New(bucketCfg); err != nil {
+			return err
+		}
+
+		config.Volumes.BucketClasses = bucketCfg.Classes
+
+		logger.Info("serving bucket volumes", "backend", bucketCfg.Backend, "endpoint", bucketCfg.Endpoint, "classes", bucketCfg.Classes)
+	}
 	config.MonitorMaxRetries = monitorMaxRetries
 	config.MonitorRetryPeriod = monitorRetryPeriod
 	config.MonitorRetryPeriodJitter = monitorRetryPeriodJitter
@@ -791,9 +806,9 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 	// The storage operator is mandatory only for volume-market participants:
 	// providers advertising capabilities/storage/volumes (or with volume
-	// classes configured) gate startup on it; everyone else has no
-	// chart-before-daemon ordering constraint.
-	if volumesEnabled(config) {
+	// classes configured) or serving buckets gate startup on it; everyone
+	// else has no chart-before-daemon ordering constraint.
+	if volumesEnabled(config) || buckets != nil {
 		endpoint, err := providerflags.GetServiceEndpointFlagValue(logger, serviceStorageOperator)
 		if err != nil {
 			return err
@@ -839,6 +854,11 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 	ctx = context.WithValue(ctx, fromctx.CtxKeyAccountQuerier, accQuerier)
 
+	var gwRestOpts []gwrest.ServerOption
+	if buckets != nil {
+		gwRestOpts = append(gwRestOpts, gwrest.WithBuckets(buckets, bucketCfg))
+	}
+
 	gwRest, err := gwrest.NewServer(
 		ctx,
 		logger,
@@ -848,6 +868,7 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		gwaddr,
 		cctx.FromAddress,
 		clusterSettings,
+		gwRestOpts...,
 	)
 	if err != nil {
 		return err

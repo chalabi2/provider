@@ -262,6 +262,28 @@ func (c *client) VolumeStatus(ctx context.Context, ref dtypes.VolumeRef) (*crd.V
 	return obj, nil
 }
 
+func (c *client) LeaseVolume(ctx context.Context, lid mtypes.LeaseID) (*crd.Volume, error) {
+	list, err := wrapKubeCall("akash-volumes-list", func() (*crd.VolumeList, error) {
+		return c.ac.AkashV2beta2().Volumes(c.ns).List(ctx, metav1.ListOptions{
+			LabelSelector: volumeLeaseSelector(lid),
+		})
+	})
+	if err != nil && !kerrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if list != nil {
+		for i := range list.Items {
+			// labels alone are not the identity; the spec's lease is
+			if vlid, err := list.Items[i].Spec.LeaseID.FromCRD(); err == nil && vlid.Equals(lid) {
+				return &list.Items[i], nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("%w: lease %s", kubeclienterrors.ErrVolumeNotFound, lid)
+}
+
 func (c *client) DeployedVolumes(ctx context.Context) ([]ctypes.VolumeDeployment, error) {
 	list, err := wrapKubeCall("akash-volumes-list", func() (*crd.VolumeList, error) {
 		return c.ac.AkashV2beta2().Volumes(c.ns).List(ctx, metav1.ListOptions{

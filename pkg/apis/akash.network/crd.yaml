@@ -682,6 +682,9 @@ spec:
                       type: integer
                     provider:
                       type: string
+                access:
+                  type: string
+                  enum: ["", "bucket"]
             status:
               type: object
               properties:
@@ -694,3 +697,10 @@ spec:
                 retainedUntil:
                   type: string
                   format: date-time
+                bucket:
+                  type: string
+                bucketDSeq:
+                  type: string
+                  format: uint64
+                bucketSize:
+                  type: string

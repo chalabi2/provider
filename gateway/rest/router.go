@@ -90,7 +90,7 @@ type wsStreamConfig struct {
 	client    cluster.ReadClient
 }
 
-func newRouter(log log.Logger, addr sdk.Address, pclient provider.Client, ctxConfig map[interface{}]interface{}, middlewares ...mux.MiddlewareFunc) *mux.Router {
+func newRouter(log log.Logger, addr sdk.Address, pclient provider.Client, ctxConfig map[interface{}]interface{}, buckets *bucketGateway, middlewares ...mux.MiddlewareFunc) *mux.Router {
 	router := mux.NewRouter()
 
 	// store provider address in context as a lease's endpoints below need it
@@ -220,6 +220,27 @@ func newRouter(log log.Logger, addr sdk.Address, pclient provider.Client, ctxCon
 	// POST /lease/<lease-id>/shell
 	mrouter.HandleFunc("/shell",
 		leaseShellHandler(log, pclient.Cluster()))
+
+	// bucket routes exist only on providers that serve buckets
+	if buckets != nil {
+		mrouter = lrouter.NewRoute().Subrouter()
+		mrouter.Use(requireEndpointScopeForLeaseID(ajwt.PermissionScopeBucket))
+
+		// GET /lease/<lease-id>/bucket
+		mrouter.HandleFunc("/bucket", buckets.info).
+			Methods(http.MethodGet)
+
+		mrouter = lrouter.NewRoute().Subrouter()
+		mrouter.Use(requireEndpointScopeForLeaseID(ajwt.PermissionScopeBucketKeys))
+
+		// POST /lease/<lease-id>/bucket/keys
+		mrouter.HandleFunc("/bucket/keys", buckets.createKey).
+			Methods(http.MethodPost)
+
+		// DELETE /lease/<lease-id>/bucket/keys/<key-name>
+		mrouter.HandleFunc("/bucket/keys/{keyName}", buckets.revokeKey).
+			Methods(http.MethodDelete)
+	}
 
 	return router
 }

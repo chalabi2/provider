@@ -1381,6 +1381,74 @@ func (_c *Client_LeaseStatus_Call) RunAndReturn(run func(context1 context.Contex
 	return _c
 }
 
+// LeaseVolume provides a mock function for the type Client
+func (_mock *Client) LeaseVolume(ctx context.Context, lid v1.LeaseID) (*v2beta2.Volume, error) {
+	ret := _mock.Called(ctx, lid)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LeaseVolume")
+	}
+
+	var r0 *v2beta2.Volume
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID) (*v2beta2.Volume, error)); ok {
+		return returnFunc(ctx, lid)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, v1.LeaseID) *v2beta2.Volume); ok {
+		r0 = returnFunc(ctx, lid)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*v2beta2.Volume)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, v1.LeaseID) error); ok {
+		r1 = returnFunc(ctx, lid)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// Client_LeaseVolume_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LeaseVolume'
+type Client_LeaseVolume_Call struct {
+	*mock.Call
+}
+
+// LeaseVolume is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lid v1.LeaseID
+func (_e *Client_Expecter) LeaseVolume(ctx interface{}, lid interface{}) *Client_LeaseVolume_Call {
+	return &Client_LeaseVolume_Call{Call: _e.mock.On("LeaseVolume", ctx, lid)}
+}
+
+func (_c *Client_LeaseVolume_Call) Run(run func(ctx context.Context, lid v1.LeaseID)) *Client_LeaseVolume_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 v1.LeaseID
+		if args[1] != nil {
+			arg1 = args[1].(v1.LeaseID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *Client_LeaseVolume_Call) Return(volume *v2beta2.Volume, err error) *Client_LeaseVolume_Call {
+	_c.Call.Return(volume, err)
+	return _c
+}
+
+func (_c *Client_LeaseVolume_Call) RunAndReturn(run func(ctx context.Context, lid v1.LeaseID) (*v2beta2.Volume, error)) *Client_LeaseVolume_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ObserveHostnameState provides a mock function for the type Client
 func (_mock *Client) ObserveHostnameState(ctx context.Context) (<-chan hostname.ResourceEvent, error) {
 	ret := _mock.Called(ctx)

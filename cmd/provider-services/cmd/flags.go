@@ -14,6 +14,7 @@ import (
 	cflags "pkg.akt.dev/go/cli/flags"
 
 	"github.com/akash-network/provider"
+	"github.com/akash-network/provider/bucket"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
 )
 
@@ -433,5 +434,5 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
-	return nil
+	return bucket.AddFlags(cmd)
 }
