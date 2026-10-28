@@ -182,6 +182,11 @@ func newRouter(log log.Logger, addr sdk.Address, pclient provider.Client, ctxCon
 		leaseStatusHandler(log, pclient.Cluster(), ctxConfig)).
 		Methods(http.MethodGet)
 
+	// GET /lease/<lease-id>/volume
+	mrouter.HandleFunc("/volume",
+		volumeStatusHandler(log, pclient.Cluster())).
+		Methods(http.MethodGet)
+
 	streamRouter := lrouter.NewRoute().Subrouter()
 	streamRouter.Use(requestStreamParams)
 
