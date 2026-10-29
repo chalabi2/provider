@@ -104,6 +104,7 @@ func NewService(
 		storageInv: newStorageInventory(),
 		resizes:    make(map[mtypes.LeaseID]*leaseResize),
 		resizesch:  make(chan []mvbeta.LeaseResize, 1),
+		relist:     resizesRelistPeriod,
 	}
 
 	// register the fetchers before starting run: run waits for the group on exit, and a task
@@ -174,6 +175,8 @@ type service struct {
 	resizes map[mtypes.LeaseID]*leaseResize
 	// resizesch receives pages of pending lease resizes to catch up on.
 	resizesch chan []mvbeta.LeaseResize
+	// relist is how often the pending lease resizes are listed.
+	relist time.Duration
 	// resizeWG tracks running resize evaluations.
 	resizeWG sync.WaitGroup
 }

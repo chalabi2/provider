@@ -2,6 +2,7 @@ package bidengine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -497,6 +498,116 @@ func Test_LeaseResizeCaughtUpAtStartup(t *testing.T) {
 
 	s.requireAccepted(t, lidA)
 	s.cluster.AssertNotCalled(t, "CheckResize", lidB.OrderID(), mock.Anything)
+}
+
+// relisted hands the service a page of pending resizes, as a later listing
+// of the provider's requests would.
+func (s *resizeServiceScaffold) relisted(t *testing.T, reqs ...mvbeta.LeaseResize) {
+	t.Helper()
+
+	select {
+	case s.svc.resizesch <- reqs:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out handing over a listing")
+	}
+}
+
+func Test_LeaseResizeMissedEventAnsweredByRelist(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	lid := s.lease(1)
+	req := s.request(lid, time.Now().Add(10*time.Minute))
+
+	s.cluster.On("CheckResize", mock.Anything, mock.Anything).Return(dvbeta.ResourceUnits{}, nil)
+
+	// the request was made after the startup listing, and its event missed
+	s.start(t, nil, []mvbeta.LeaseResize{req})
+
+	s.relisted(t, req)
+	s.requireAccepted(t, lid)
+
+	// answered: later listings leave it alone until the chain drops it. The
+	// service takes a page only once it has handled the one before, so the
+	// empty pages see the listings of the request handled.
+	s.relisted(t, req)
+	s.relisted(t, req)
+	s.relisted(t)
+	s.relisted(t)
+
+	require.NoError(t, s.svc.Close())
+	require.Empty(t, s.broadcasts)
+	s.cluster.AssertNumberOfCalls(t, "CheckResize", 1)
+}
+
+func Test_LeaseResizeEvaluatedAgainAfterAFailure(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	lid := s.lease(1)
+	req := s.request(lid, time.Now().Add(10*time.Minute))
+
+	s.cluster.On("CheckResize", mock.Anything, mock.Anything).Return(nil, errors.New("inventory not ready")).Once()
+	s.cluster.On("CheckResize", mock.Anything, mock.Anything).Return(dvbeta.ResourceUnits{}, nil)
+
+	s.start(t, nil, []mvbeta.LeaseResize{req})
+
+	// the first evaluation fails without answering; a listing that comes
+	// while it still runs is skipped, and one after it ended evaluates the
+	// request again
+	s.requested(t, req)
+
+	deadline := time.After(10 * time.Second)
+
+	for {
+		s.relisted(t, req)
+
+		select {
+		case msgs := <-s.broadcasts:
+			accept := requireMsgType[*mvbeta.MsgAcceptLeaseResize](t, msgs)
+			require.Equal(t, lid, accept.ID)
+			require.Equal(t, req.Digest, accept.Digest)
+
+			s.cluster.AssertNumberOfCalls(t, "CheckResize", 2)
+
+			return
+		case <-deadline:
+			t.Fatal("the request was not evaluated again")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func Test_LeaseResizesRelisted(t *testing.T) {
+	provider := testutil.AccAddress(t)
+	req := resizeRequestForTest(mtypes.MakeLeaseID(mtypes.MakeBidID(testOrderID(t, 1), provider)),
+		withResizedMemory(computeGroupForResizeTest(t).GroupSpec.Resources), time.Now().Add(10*time.Minute))
+
+	market := &marketmocks.QueryClient{}
+	market.On("LeaseResizes", mock.Anything, mock.MatchedBy(func(r *mvbeta.QueryLeaseResizesRequest) bool {
+		return r.Provider == provider.String() && r.Owner == ""
+	})).Return(&mvbeta.QueryLeaseResizesResponse{LeaseResizes: []mvbeta.LeaseResize{req}}, nil)
+
+	aqc := &clientmocks.QueryClient{}
+	aqc.On("Market").Return(market)
+
+	svc := &service{
+		session:   session.New(testutil.Logger(t), nil, &ptypes.Provider{Owner: provider.String()}, 0),
+		resizesch: make(chan []mvbeta.LeaseResize),
+		relist:    10 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errch := make(chan error, 1)
+	go func() {
+		errch <- svc.resizesFetcher(ctx, aqc)
+	}()
+
+	// the startup listing, then the periodic ones
+	for i := 0; i < 3; i++ {
+		page := testutil.ChannelWaitForValue(t, svc.resizesch).([]mvbeta.LeaseResize)
+		require.Equal(t, []mvbeta.LeaseResize{req}, page)
+	}
+
+	cancel()
+	require.ErrorIs(t, testutil.ChannelWaitForValue(t, errch).(error), context.Canceled)
 }
 
 func Test_LeaseResizeCanceledWhileEvaluating(t *testing.T) {

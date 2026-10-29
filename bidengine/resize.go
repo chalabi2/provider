@@ -28,10 +28,18 @@ import (
 	"github.com/akash-network/provider/session"
 )
 
-// resizeApplyAttempts bounds the group reads of an applied resize. If they all
-// fail the reservation keeps the old size, and the inventory under-counts the
-// tenant's resized pods until the provider restarts.
-const resizeApplyAttempts = 5
+const (
+	// resizeApplyAttempts bounds the group reads of an applied resize. If
+	// they all fail the reservation keeps the old size, and the inventory
+	// under-counts the tenant's resized pods until the provider restarts.
+	resizeApplyAttempts = 5
+
+	// resizesRelistPeriod is how often the provider lists the pending lease
+	// resizes addressed to it. A request whose EventLeaseResizeRequested it
+	// missed is answered by the next listing, long before it expires
+	// (lease_resize_ttl defaults to 10m).
+	resizesRelistPeriod = time.Minute
+)
 
 var leaseResizeCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "provider_lease_resize",
@@ -68,6 +76,11 @@ type leaseResize struct {
 	now     func() time.Time
 
 	cancel context.CancelFunc
+
+	// done is closed once run returns. answered then tells whether run
+	// answered the request on chain.
+	done     chan struct{}
+	answered bool
 }
 
 func newLeaseResize(svc *service, lid mtypes.LeaseID, digest []byte, expiresAt int64, pending *mvbeta.LeaseResize) *leaseResize {
@@ -85,6 +98,19 @@ func newLeaseResize(svc *service, lid mtypes.LeaseID, digest []byte, expiresAt i
 		storage:   svc.storageInv,
 		log:       session.Log().With("lid", lid),
 		now:       time.Now,
+		done:      make(chan struct{}),
+	}
+}
+
+// unanswered reports whether the evaluation has ended without answering its
+// request, on an error or on finding the request gone. A request still
+// pending is then worth evaluating again.
+func (r *leaseResize) unanswered() bool {
+	select {
+	case <-r.done:
+		return !r.answered
+	default:
+		return false
 	}
 }
 
@@ -123,6 +149,8 @@ func (r *leaseResize) run(ctx context.Context) {
 
 		return
 	}
+
+	r.answered = true
 
 	switch msg := msg.(type) {
 	case *mvbeta.MsgAcceptLeaseResize:
@@ -331,45 +359,64 @@ func walkLeaseResizes(ctx context.Context, qc mvbeta.QueryClient, req mvbeta.Que
 }
 
 // resizesFetcher lists the pending lease resizes addressed to this provider
-// once at startup and queues them for run. Requests made while it runs
-// arrive as EventLeaseResizeRequested.
+// and queues them for run: at startup, to catch up on requests made while
+// the provider was down, and every relist period after, to answer a request
+// whose EventLeaseResizeRequested it missed while running. A listing that
+// fails is retried after ordersFetchRetryPeriod.
 func (s *service) resizesFetcher(ctx context.Context, aqc aclient.QueryClient) error {
+	listing := time.NewTimer(0)
+	defer listing.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-listing.C:
+		}
+
+		wait := s.relist
+
+		err := s.listResizes(ctx, aqc)
+
+		// check the context rather than the error: gRPC reports cancellation as
+		// a status error which does not match context.Canceled
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if err != nil {
+			s.session.Log().Error("querying pending lease resizes", "err", err)
+
+			// a node repeating its page key would repeat it right away too
+			if !errors.Is(err, errResizesNextKeyRepeated) {
+				wait = ordersFetchRetryPeriod
+			}
+		}
+
+		listing.Reset(wait)
+	}
+}
+
+// listResizes queues the pending lease resizes addressed to this provider
+// for run, a page at a time.
+func (s *service) listResizes(ctx context.Context, aqc aclient.QueryClient) error {
 	req := mvbeta.QueryLeaseResizesRequest{
 		Provider: s.session.Provider().Owner,
 	}
 
-	for {
-		err := walkLeaseResizes(ctx, aqc.Market(), req, func(page []mvbeta.LeaseResize) bool {
-			select {
-			case s.resizesch <- page:
-				return true
-			case <-ctx.Done():
-				return false
-			}
-		})
-
-		// check the context rather than the error: gRPC reports cancellation as
-		// a status error which does not match context.Canceled
-		if err == nil || ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		s.session.Log().Error("querying pending lease resizes", "err", err)
-
-		if errors.Is(err, errResizesNextKeyRepeated) {
-			return nil
-		}
-
+	return walkLeaseResizes(ctx, aqc.Market(), req, func(page []mvbeta.LeaseResize) bool {
 		select {
+		case s.resizesch <- page:
+			return true
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(ordersFetchRetryPeriod):
+			return false
 		}
-	}
+	})
 }
 
 // processResizesPage starts evaluations for a page of the pending lease
-// resizes found at startup. Expired requests can no longer be accepted.
+// resizes listed for the provider. Expired requests can no longer be
+// accepted.
 func (s *service) processResizesPage(ctx context.Context, page []mvbeta.LeaseResize) {
 	now := time.Now()
 
@@ -380,20 +427,22 @@ func (s *service) processResizesPage(ctx context.Context, page []mvbeta.LeaseRes
 			continue
 		}
 
-		s.session.Log().Info("catching up lease resize", "lid", req.LeaseID)
-		s.startResize(ctx, req.LeaseID, req.Digest, req.ExpiresAt, &req)
+		if s.startResize(ctx, req.LeaseID, req.Digest, req.ExpiresAt, &req) {
+			s.session.Log().Info("catching up lease resize", "lid", req.LeaseID)
+		}
 	}
 }
 
-// startResize starts evaluating a lease resize request unless this run has
-// seen it already, so a request found by both the catch-up and its event is
-// answered once. A request that replaces an earlier one for the same lease
-// supersedes it.
-func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, digest []byte, expiresAt int64, pending *mvbeta.LeaseResize) {
+// startResize starts evaluating a lease resize request and reports whether
+// it did. A request this run is evaluating or has answered is skipped, so
+// one found by a listing and by its event is answered once; one whose
+// evaluation ended without answering it is evaluated again. A request that
+// replaces an earlier one for the same lease supersedes it.
+func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, digest []byte, expiresAt int64, pending *mvbeta.LeaseResize) bool {
 	if r := s.resizes[lid]; r != nil {
-		if bytes.Equal(r.digest, digest) {
+		if bytes.Equal(r.digest, digest) && !r.unanswered() {
 			s.session.Log().Debug("lease resize already seen", "lid", lid)
-			return
+			return false
 		}
 
 		r.cancel()
@@ -412,9 +461,12 @@ func (s *service) startResize(ctx context.Context, lid mtypes.LeaseID, digest []
 	go func() {
 		defer s.resizeWG.Done()
 		defer cancel()
+		defer close(r.done)
 
 		r.run(rctx)
 	}()
+
+	return true
 }
 
 // dropResize forgets the lease's resize request once the chain has resolved
