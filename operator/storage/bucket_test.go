@@ -224,7 +224,7 @@ func TestBucketAdoptionRejected(t *testing.T) {
 func TestBucketAdoptionWithoutLeaseDoesNotStopGC(t *testing.T) {
 	lid := testutil.LeaseID(t)
 	vol := provisioned(testBucketVolume(t, lid, crd.VolumePhaseRetained), crd.VolumePhaseRetained)
-	past := metav1.NewTime(time.Now().Add(-time.Hour))
+	past := metav1.NewTime(time.Now().Add(-gcGrace - time.Hour))
 	vol.Status.RetainedUntil = &past
 	vol.Spec.GroupID.DSeq = strconv.FormatUint(lid.DSeq+7, 10)
 
@@ -259,7 +259,7 @@ func TestBucketAdoptingFreezesGC(t *testing.T) {
 
 func TestBucketGC(t *testing.T) {
 	vol := provisioned(testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhaseRetained), crd.VolumePhaseRetained)
-	past := metav1.NewTime(time.Now().Add(-time.Minute))
+	past := metav1.NewTime(time.Now().Add(-gcGrace - time.Minute))
 	vol.Status.RetainedUntil = &past
 	s, fake, ref := bucketScaffold(t, nil, vol)
 	ensureFakeBucket(t, fake, ref)
@@ -272,7 +272,7 @@ func TestBucketGC(t *testing.T) {
 
 func TestBucketGCFailureKeepsRecord(t *testing.T) {
 	vol := provisioned(testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhaseRetained), crd.VolumePhaseRetained)
-	past := metav1.NewTime(time.Now().Add(-time.Minute))
+	past := metav1.NewTime(time.Now().Add(-gcGrace - time.Minute))
 	vol.Status.RetainedUntil = &past
 	s, fake, ref := bucketScaffold(t, nil, vol)
 	ensureFakeBucket(t, fake, ref)
@@ -562,4 +562,26 @@ func TestBucketImportingGrowsQuota(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(4194304), fake.Quota(ref))
 	require.Equal(t, crd.VolumePhaseImporting, after.Status.Phase)
+}
+
+func TestBucketGCKeepsTheBucketThroughTheGrace(t *testing.T) {
+	vol := provisioned(testBucketVolume(t, testutil.LeaseID(t), crd.VolumePhaseRetained), crd.VolumePhaseRetained)
+	deadline := time.Now().Add(-30 * time.Minute)
+	until := metav1.NewTime(deadline)
+	vol.Status.RetainedUntil = &until
+
+	s, fake, ref := bucketScaffold(t, nil, vol)
+	ensureFakeBucket(t, fake, ref)
+
+	after, err := reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	require.Equal(t, crd.VolumePhaseRetained, after.Status.Phase)
+	require.True(t, fake.Exists(ref), "an adoption the chain took at the deadline may still arrive")
+
+	s.now = deadline.Add(gcGrace + time.Minute)
+
+	after, err = reconcileVolume(t, s, ref.UserID)
+	require.NoError(t, err)
+	require.Nil(t, after)
+	require.False(t, fake.Exists(ref))
 }

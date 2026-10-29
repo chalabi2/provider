@@ -515,7 +515,7 @@ func TestGCDestroysPastDeadline(t *testing.T) {
 
 	vol := testVolume(t, lid, crd.VolumePhaseRetained)
 	vol.Status.PVName = testPV
-	until := metav1.NewTime(time.Now().Add(-time.Hour))
+	until := metav1.NewTime(time.Now().Add(-gcGrace - time.Hour))
 	vol.Status.RetainedUntil = &until
 
 	pv := testPVObj(vol, testVolNS, vol.Name)
@@ -1076,4 +1076,101 @@ func TestReconcileAdoptRejectedForAReplicaWithoutAWholeCopy(t *testing.T) {
 
 	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
 	require.Zero(t, chain.calls, "a half-written volume is refused before the chain is asked")
+}
+
+func TestGCKeepsARetainedVolumeThroughTheGrace(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	deadline := time.Now().Add(-30 * time.Minute)
+
+	vol := testVolume(t, lid, crd.VolumePhaseRetained)
+	vol.Status.PVName = testPV
+	until := metav1.NewTime(deadline)
+	vol.Status.RetainedUntil = &until
+
+	s := makeScaffold(t, nil, []runtime.Object{holderPVC(vol, testPV), testPVObj(vol, testVolNS, vol.Name)}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	_, err := s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+	require.NoError(t, err, "destroyed within the grace")
+	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
+
+	s.now = deadline.Add(gcGrace + time.Minute)
+
+	require.NoError(t, s.r.reconcile(context.Background(), getVolume(t, s, vol.Name)))
+
+	_, err = s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+	require.True(t, kerrors.IsNotFound(err))
+}
+
+// TestGCLetsAnAdoptionAcceptedAtTheDeadlineThrough: the chain accepted an
+// adoption in the deadline's last block, and the operator passed the
+// deadline before its event arrived. The volume is still there to adopt.
+func TestGCLetsAnAdoptionAcceptedAtTheDeadlineThrough(t *testing.T) {
+	ctx := context.Background()
+	chain := &fakeChain{}
+
+	s, vol, deadDSeq := adoptionScaffold(t, chain)
+
+	// the record still names the dead deployment: no adoption seen yet
+	adopting := vol.Spec.GroupID.DSeq
+	vol.Spec.GroupID.DSeq = deadDSeq
+	deadline := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	vol.Status.RetainedUntil = &deadline
+
+	_, err := s.ac.AkashV2beta2().Volumes(testNS).Update(ctx, vol, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, s.r.reconcile(ctx, getVolume(t, s, vol.Name)))
+	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
+
+	// the adoption's event arrives, as applyAdoption records it
+	adopted := getVolume(t, s, vol.Name)
+	adopted.Spec.GroupID.DSeq = adopting
+	adopted.Status.Phase = crd.VolumePhaseAdopting
+
+	_, err = s.ac.AkashV2beta2().Volumes(testNS).Update(ctx, adopted, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	dead, err := strconv.ParseUint(deadDSeq, 10, 64)
+	require.NoError(t, err)
+
+	chain.policy = &dv1.VolumePolicy{Vid: testVID, Adopt: &dv1.VolumeRef{Owner: vol.Spec.Owner, DSeq: dead, GSeq: 1, Name: testVID}}
+
+	require.NoError(t, s.r.reconcile(ctx, getVolume(t, s, vol.Name)))
+
+	uvol := getVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseProvisioned, uvol.Status.Phase)
+	require.Nil(t, uvol.Status.RetainedUntil)
+}
+
+// TestGCOfVolumesNothingCanAdoptHasNoGrace: a volume released at its close
+// (reclaim: delete), or one that moved away and whose hold ended, goes at
+// its deadline.
+func TestGCOfVolumesNothingCanAdoptHasNoGrace(t *testing.T) {
+	past := metav1.NewTime(time.Now().Add(-time.Minute))
+
+	for name, set := range map[string]func(*crd.Volume){
+		"released at its close": func(vol *crd.Volume) {
+			vol.Spec.Reclaim = dv1.VolumeReclaimDelete.String()
+			vol.Status.Phase = crd.VolumePhaseReleasing
+		},
+		"moved away": func(vol *crd.Volume) {
+			vol.Status.HeldUntil = &past
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vol := testVolume(t, testutil.LeaseID(t), crd.VolumePhaseRetained)
+			vol.Status.PVName = testPV
+			vol.Status.RetainedUntil = &past
+			set(vol)
+
+			s := makeScaffold(t, nil, []runtime.Object{holderPVC(vol, testPV), testPVObj(vol, testVolNS, vol.Name)}, []runtime.Object{vol})
+
+			require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+			_, err := s.kc.CoreV1().PersistentVolumes().Get(context.Background(), testPV, metav1.GetOptions{})
+			require.True(t, kerrors.IsNotFound(err))
+		})
+	}
 }

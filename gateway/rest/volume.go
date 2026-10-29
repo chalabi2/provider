@@ -23,7 +23,8 @@ type VolumeStatus struct {
 	ImportFrom string `json:"import_from,omitempty"`
 	// AttachedLease is the compute lease the volume is attached to.
 	AttachedLease string `json:"attached_lease,omitempty"`
-	// RetainedUntil is when a volume whose lease closed is destroyed.
+	// RetainedUntil is the deadline to adopt a volume whose lease closed;
+	// the volume is destroyed once it passes.
 	RetainedUntil *time.Time `json:"retained_until,omitempty"`
 	// ReplicaOf names the primary a replica follows (owner/dseq/gseq/name).
 	ReplicaOf string `json:"replica_of,omitempty"`

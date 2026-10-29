@@ -255,9 +255,18 @@ func (r *reconciler) destinationHolds(ctx context.Context, vol *crd.Volume) (boo
 	return false, nil
 }
 
-// gcDue reports whether the volume passed its retention deadline. Exporting
-// and Adopting phases are excluded structurally: destruction only ever
-// happens out of Retained or Releasing.
+// gcGrace is how long past its retention deadline a retained volume is
+// still kept. The chain accepts an adoption until the deadline, by block
+// time, and the operator learns of one accepted in the last block only
+// after it; a provider's clock may also run ahead of block time.
+const gcGrace = time.Hour
+
+// gcDue reports whether the volume passed its retention deadline, and for
+// one that could still be adopted, the grace after it. Exporting and
+// Adopting phases are excluded structurally: destruction only ever happens
+// out of Retained or Releasing. Nothing adopts a volume released at its
+// close (reclaim: delete) or one that moved away, so those go at the
+// deadline.
 func (r *reconciler) gcDue(vol *crd.Volume) bool {
 	switch vol.Status.Phase {
 	case crd.VolumePhaseRetained, crd.VolumePhaseReleasing:
@@ -265,7 +274,17 @@ func (r *reconciler) gcDue(vol *crd.Volume) bool {
 		return false
 	}
 
-	return vol.Status.RetainedUntil != nil && r.now().After(vol.Status.RetainedUntil.Time)
+	if vol.Status.RetainedUntil == nil {
+		return false
+	}
+
+	deadline := vol.Status.RetainedUntil.Time
+
+	if vol.Status.Phase == crd.VolumePhaseRetained && vol.Status.HeldUntil == nil {
+		deadline = deadline.Add(gcGrace)
+	}
+
+	return r.now().After(deadline)
 }
 
 // provision creates the holder PVC against the -retain class and, once the

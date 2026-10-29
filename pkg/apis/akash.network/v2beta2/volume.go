@@ -110,8 +110,10 @@ type VolumeStatus struct {
 	PVName string `json:"pvName,omitempty"`
 	// AttachedLease is the compute LeaseID string while Attached.
 	AttachedLease string `json:"attachedLease,omitempty"`
-	// RetainedUntil = closedAt + retention; the GC deadline. The single
-	// destruction path triggers only past this positive deadline.
+	// RetainedUntil = closedAt + retention; the GC deadline, which the
+	// chain holds adoption to. The single destruction path triggers only
+	// past this positive deadline, and for a volume that can be adopted,
+	// past a grace after it.
 	RetainedUntil *metav1.Time `json:"retainedUntil,omitempty"`
 	// Bucket is the provisioned bucket of a bucket volume.
 	Bucket string `json:"bucket,omitempty"`
