@@ -728,6 +728,15 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 		GrowableClasses: viper.GetStringSlice(FlagVolumeGrowableClasses),
 	}
 
+	if growable := config.Volumes.GrowableClasses; len(growable) != 0 {
+		kc, err := fromctx.KubeClientFromCtx(ctx)
+		if err != nil {
+			return err
+		}
+
+		config.Volumes.GrowableClasses = expandableClasses(ctx, kc, growable, logger)
+	}
+
 	// buckets are served only with a backend configured; without one the
 	// bid engine declines every bucket order
 	bucketCfg := bucket.ConfigFromViper()

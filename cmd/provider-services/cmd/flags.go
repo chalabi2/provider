@@ -223,7 +223,7 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
-	cmd.Flags().StringSlice(FlagVolumeGrowableClasses, nil, "volume classes whose -retain StorageClass allows volume expansion; a lease resize growing a mounted volume of any other class is declined. empty declines every mounted volume's growth. buckets grow by a quota raise and need no class here")
+	cmd.Flags().StringSlice(FlagVolumeGrowableClasses, nil, "volume classes whose -retain StorageClass allows volume expansion; a lease resize growing a mounted volume of any other class is declined. empty declines every mounted volume's growth; a class whose -retain StorageClass does not allow expansion is dropped at startup. buckets grow by a quota raise and need no class here")
 	if err := viper.BindPFlag(FlagVolumeGrowableClasses, cmd.Flags().Lookup(FlagVolumeGrowableClasses)); err != nil {
 		return err
 	}
