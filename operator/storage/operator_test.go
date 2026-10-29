@@ -41,6 +41,14 @@ type fakeChainClient struct {
 
 	size      uint64
 	sizeCalls int
+
+	// closedAt is when the chain closed each lease, by its String() form
+	closedAt    map[string]time.Time
+	closedAtErr error
+}
+
+func (f *fakeChainClient) LeaseClosedAt(_ context.Context, lid mv1.LeaseID) (time.Time, error) {
+	return f.closedAt[lid.String()], f.closedAtErr
 }
 
 func (f *fakeChainClient) ActiveLeases(_ context.Context) (map[string]bool, error) {
@@ -94,8 +102,8 @@ func TestApplyLeaseClosedRetainsVolume(t *testing.T) {
 	require.Equal(t, crd.VolumePhaseRetained, uvol.Status.Phase)
 	require.NotNil(t, uvol.Status.RetainedUntil)
 
-	// retainedUntil = closedAt + retention (event receipt stands in for
-	// closedAt until the chain exposes it)
+	// retainedUntil = closedAt + retention; without chain access the time
+	// the operator observed the close stands in for closedAt
 	expected := time.Now().Add(168 * time.Hour)
 	require.WithinDuration(t, expected, uvol.Status.RetainedUntil.Time, time.Minute)
 }
@@ -659,4 +667,108 @@ func TestVolumeStateReportsAReplica(t *testing.T) {
 	state = volumeState(vol)
 	require.False(t, state.Syncing)
 	require.Equal(t, "2026-10-29T12:00:00Z", state.SyncedAt)
+}
+
+// closedOnChain is a chain on which lid closed at closedAt.
+func closedOnChain(lid mv1.LeaseID, closedAt time.Time) *fakeChainClient {
+	return &fakeChainClient{
+		active:   map[string]bool{},
+		closedAt: map[string]time.Time{lid.String(): closedAt},
+	}
+}
+
+// TestRetentionRunsFromTheChainsClose: the GC deadline is the one the
+// chain holds adoption to, closed_at + retention, whenever the operator
+// learns of the close.
+func TestRetentionRunsFromTheChainsClose(t *testing.T) {
+	closedAt := time.Date(2026, 10, 20, 9, 30, 0, 0, time.UTC)
+	retention := 168 * time.Hour
+
+	for name, tc := range map[string]struct {
+		apply func(s *opScaffold, lid mv1.LeaseID) error
+		phase crd.VolumePhase
+	}{
+		"closed": {
+			func(s *opScaffold, lid mv1.LeaseID) error {
+				return s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner)
+			},
+			crd.VolumePhaseRetained,
+		},
+		"moved": {
+			func(s *opScaffold, lid mv1.LeaseID) error {
+				return s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonVolumeMigrate)
+			},
+			crd.VolumePhaseExporting,
+		},
+		"closed while the operator was away": {
+			func(s *opScaffold, _ mv1.LeaseID) error {
+				return s.op.resyncChain(context.Background())
+			},
+			crd.VolumePhaseRetained,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lid := testutil.LeaseID(t)
+			vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+			vol.Status.PVName = testPV
+
+			chain := closedOnChain(lid, closedAt)
+			chain.leases = []replication.VolumeLease{{
+				Provider: lid.Provider,
+				DSeq:     lid.DSeq,
+				OSeq:     lid.OSeq,
+				State:    mv1.LeaseClosed,
+				Reason:   mv1.LeaseClosedReasonOwner,
+				Policy:   dv1.VolumePolicy{Vid: testVID},
+			}}
+
+			s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+			require.NoError(t, tc.apply(s, lid))
+
+			uvol := getOpVolume(t, s, vol.Name)
+			require.Equal(t, tc.phase, uvol.Status.Phase)
+			require.True(t, closedAt.Add(retention).Equal(uvol.Status.RetainedUntil.Time), "retained until %s", uvol.Status.RetainedUntil)
+		})
+	}
+}
+
+func TestReclaimDeleteReleasesFromTheChainsClose(t *testing.T) {
+	closedAt := time.Date(2026, 10, 20, 9, 30, 0, 0, time.UTC)
+
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Spec.Reclaim = dv1.VolumeReclaimDelete.String()
+	vol.Status.PVName = testPV
+
+	s := makeOpScaffold(t, closedOnChain(lid, closedAt), []runtime.Object{vol})
+
+	require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
+
+	uvol := getOpVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseReleasing, uvol.Status.Phase)
+	require.True(t, closedAt.Equal(uvol.Status.RetainedUntil.Time))
+}
+
+// TestRetentionRunsFromTheObservedCloseWithoutTheChainsOwn: a lease closed
+// before the chain recorded closed_at, or a chain that cannot be read,
+// leaves the time the operator observed the close.
+func TestRetentionRunsFromTheObservedCloseWithoutTheChainsOwn(t *testing.T) {
+	for name, chain := range map[string]*fakeChainClient{
+		"closed before closed_at existed": {active: map[string]bool{}},
+		"chain unreadable":                {active: map[string]bool{}, closedAtErr: fmt.Errorf("node down")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lid := testutil.LeaseID(t)
+			vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+			vol.Status.PVName = testPV
+
+			s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+			require.NoError(t, s.op.applyLeaseClosed(context.Background(), lid, mv1.LeaseClosedReasonOwner))
+
+			uvol := getOpVolume(t, s, vol.Name)
+			require.WithinDuration(t, time.Now().Add(168*time.Hour), uvol.Status.RetainedUntil.Time, time.Minute)
+		})
+	}
 }

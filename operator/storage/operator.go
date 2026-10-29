@@ -399,9 +399,9 @@ func (op *storageOperator) settleInactiveLease(ctx context.Context, vol *crd.Vol
 
 		return nil
 	case moves, vol.Status.Phase == crd.VolumePhaseExporting:
-		return op.stampExportingRetention(ctx, vol)
+		return op.stampExportingRetention(ctx, vol, lid)
 	default:
-		return op.retainVolume(ctx, vol)
+		return op.retainVolume(ctx, vol, lid)
 	}
 }
 
@@ -481,20 +481,20 @@ func (op *storageOperator) applyLeaseClosed(ctx context.Context, lid mv1.LeaseID
 				// a migration in flight: the retention clock starts (the
 				// source holds through window + retention) but the phase
 				// stays Exporting so GC remains frozen until the deadline
-				if err := op.stampExportingRetention(ctx, vol); err != nil {
+				if err := op.stampExportingRetention(ctx, vol, lid); err != nil {
 					return err
 				}
 			default:
 				// a move whose reclamation went unseen exports all the same
 				if closedForMove(reason) {
-					if err := op.stampExportingRetention(ctx, vol); err != nil {
+					if err := op.stampExportingRetention(ctx, vol, lid); err != nil {
 						return err
 					}
 
 					continue
 				}
 
-				if err := op.retainVolume(ctx, vol); err != nil {
+				if err := op.retainVolume(ctx, vol, lid); err != nil {
 					return err
 				}
 			}
@@ -597,10 +597,10 @@ func (op *storageOperator) applyLeaseResized(ctx context.Context, lid mv1.LeaseI
 }
 
 // stampExportingRetention starts the retention clock on a volume whose own
-// lease closed for a move, freezing it in Exporting: the destination may
-// still be pulling the final diff. The reconciler thaws the phase to
+// lease lid closed for a move, freezing it in Exporting: the destination
+// may still be pulling the final diff. The reconciler thaws the phase to
 // Retained once the deadline passes.
-func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd.Volume) error {
+func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd.Volume, lid mv1.LeaseID) error {
 	if vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil {
 		return nil
 	}
@@ -614,7 +614,7 @@ func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd
 	uvol.Status.Phase = crd.VolumePhaseExporting
 	uvol.Status.AttachedLease = ""
 
-	retainedUntil := metav1.NewTime(time.Now().Add(retention))
+	retainedUntil := metav1.NewTime(op.closedAt(ctx, lid).Add(retention))
 	uvol.Status.RetainedUntil = &retainedUntil
 
 	op.log.Info("exporting volume lease closed; retention clock started",
@@ -743,26 +743,24 @@ func (op *storageOperator) detachVolume(ctx context.Context, vol *crd.Volume, le
 	return nil
 }
 
-// retainVolume starts the retention clock: retainedUntil = closedAt +
-// retention. The chain does not expose the lease's closed_at yet (chain-sdk
-// follow-up); until it does the event receipt time stands in, which only
-// ever extends the window.
-func (op *storageOperator) retainVolume(ctx context.Context, vol *crd.Volume) error {
+// retainVolume starts the retention clock of a volume whose own lease lid
+// closed: retainedUntil = closedAt + retention.
+func (op *storageOperator) retainVolume(ctx context.Context, vol *crd.Volume, lid mv1.LeaseID) error {
 	uvol := vol.DeepCopy()
 	uvol.Status.AttachedLease = ""
 
-	now := metav1.NewTime(time.Now())
+	closedAt := metav1.NewTime(op.closedAt(ctx, lid))
 
 	if uvol.Spec.Reclaim == dv1.VolumeReclaimDelete.String() {
 		uvol.Status.Phase = crd.VolumePhaseReleasing
-		uvol.Status.RetainedUntil = &now
+		uvol.Status.RetainedUntil = &closedAt
 	} else {
 		retention, err := time.ParseDuration(uvol.Spec.Retention)
 		if err != nil {
 			return fmt.Errorf("%w: volume %s retention %q: %s", ErrVolumeOperator, uvol.Name, uvol.Spec.Retention, err.Error())
 		}
 
-		retainedUntil := metav1.NewTime(now.Add(retention))
+		retainedUntil := metav1.NewTime(closedAt.Add(retention))
 		uvol.Status.Phase = crd.VolumePhaseRetained
 		uvol.Status.RetainedUntil = &retainedUntil
 	}
@@ -777,6 +775,31 @@ func (op *storageOperator) retainVolume(ctx context.Context, vol *crd.Volume) er
 	*vol = *updated
 
 	return nil
+}
+
+// closedAt is when lid closed, which a volume's retention runs from: the
+// chain's closed_at, the deadline adoption is held to as well. A lease the
+// chain closed before it recorded closed_at, or a chain that cannot be
+// read, leaves the time the operator observed the close, which only ever
+// extends the window.
+func (op *storageOperator) closedAt(ctx context.Context, lid mv1.LeaseID) time.Time {
+	observed := time.Now()
+
+	if op.chain == nil {
+		return observed
+	}
+
+	closedAt, err := op.chain.LeaseClosedAt(ctx, lid)
+	if err != nil {
+		op.log.Error("reading when the volume lease closed; retention runs from now", "lid", lid, "err", err)
+		return observed
+	}
+
+	if closedAt.IsZero() {
+		return observed
+	}
+
+	return closedAt
 }
 
 func volumeState(vol *crd.Volume) VolumeState {

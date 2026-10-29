@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"time"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmclient "github.com/cometbft/cometbft/rpc/client"
@@ -37,6 +38,11 @@ type ChainClient interface {
 	// VolumeSize returns the storage size the chain holds for a volume
 	// group, which a lease resize may have grown.
 	VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, error)
+
+	// LeaseClosedAt returns the block time the chain closed a lease at
+	// (Lease.closed_at); zero for a lease still open, or closed before the
+	// chain recorded it.
+	LeaseClosedAt(ctx context.Context, lid mv1.LeaseID) (time.Time, error)
 
 	// Events streams the storage market's chain events: EventLeaseClosed,
 	// EventLeaseReclaimStarted, EventLeaseResized, EventVolumeAttached,
@@ -125,6 +131,19 @@ func (c *chainClient) VolumeSize(ctx context.Context, id dv1.GroupID) (uint64, e
 	}
 
 	return gspec.Resources[0].Storage[0].Quantity.Value(), nil
+}
+
+func (c *chainClient) LeaseClosedAt(ctx context.Context, lid mv1.LeaseID) (time.Time, error) {
+	resp, err := c.qc.Market().Lease(ctx, &mvbeta.QueryLeaseRequest{ID: lid})
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if resp.Lease.ClosedAt <= 0 {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(resp.Lease.ClosedAt, 0), nil
 }
 
 // Events subscribes to new-block headers and decodes the volume-relevant
