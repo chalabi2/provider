@@ -272,6 +272,11 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.Flags().Duration(FlagLeaseResizeManifestTimeout, cfg.LeaseResizeManifestTimeout, "time a resized lease's reservation holds the new size next to the lease's running pods while waiting for the tenant's manifest at the new size; once it passes the difference is no longer held, so a later roll may not fit. > 0")
+	if err := viper.BindPFlag(FlagLeaseResizeManifestTimeout, cmd.Flags().Lookup(FlagLeaseResizeManifestTimeout)); err != nil {
+		return err
+	}
+
 	cmd.Flags().String(FlagMetricsListener, "", "ip and port to start the metrics listener on")
 	if err := viper.BindPFlag(FlagMetricsListener, cmd.Flags().Lookup(FlagMetricsListener)); err != nil {
 		return err

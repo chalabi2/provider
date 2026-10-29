@@ -6,6 +6,13 @@ import (
 	"github.com/akash-network/provider/cluster/kube/builder"
 )
 
+// DefaultLeaseResizeManifestTimeout is how long a lease resize waits for the
+// tenant's manifest at the new size by default. A client that rolls on its
+// own, as Console does, sends it seconds after the accept; ten minutes, the
+// chain's default lease_resize_ttl, gives a tenant sending it by hand as long
+// to roll as the request had to be answered.
+const DefaultLeaseResizeManifestTimeout = 10 * time.Minute
+
 type Config struct {
 	InventoryResourcePollPeriod     time.Duration
 	InventoryResourceDebugFrequency uint
@@ -29,6 +36,11 @@ type Config struct {
 	ReclamationRPCTimeout           time.Duration
 	ReclamationCloseRetryInterval   time.Duration
 	ClusterSettings                 map[interface{}]interface{}
+	// LeaseResizeManifestTimeout bounds how long a lease resize keeps the
+	// lease's reservation pending, holding the new size on top of the pods
+	// from before the resize, while it waits for the tenant's manifest at
+	// the new size. Zero waits without a bound.
+	LeaseResizeManifestTimeout time.Duration
 }
 
 func NewDefaultConfig() Config {
@@ -44,5 +56,6 @@ func NewDefaultConfig() Config {
 		GatewayProvider:                 "nginx",
 		ReclamationRPCTimeout:           30 * time.Second,
 		ReclamationCloseRetryInterval:   time.Minute,
+		LeaseResizeManifestTimeout:      DefaultLeaseResizeManifestTimeout,
 	}
 }

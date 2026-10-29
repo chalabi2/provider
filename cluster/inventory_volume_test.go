@@ -87,11 +87,21 @@ func TestReservationKinds(t *testing.T) {
 func volumeInventoryServiceForTest(t *testing.T, volumes []ctypes.VolumeDeployment) (*inventoryService, pubsub.Bus, context.CancelFunc) {
 	t.Helper()
 
-	config := Config{
+	return inventoryServiceForTest(t, inventoryConfigForTest(), volumes)
+}
+
+func inventoryConfigForTest() Config {
+	return Config{
 		InventoryResourcePollPeriod:     time.Second,
 		InventoryResourceDebugFrequency: 1,
 		InventoryExternalPortQuantity:   1000,
 	}
+}
+
+// inventoryServiceForTest runs an inventory service on a single null node,
+// holding the volumes' durable reservations.
+func inventoryServiceForTest(t *testing.T, config Config, volumes []ctypes.VolumeDeployment) (*inventoryService, pubsub.Bus, context.CancelFunc) {
+	t.Helper()
 
 	myLog := testutil.Logger(t)
 	bus := pubsub.NewBus()

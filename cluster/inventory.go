@@ -634,6 +634,7 @@ func (is *inventoryService) handleRequest(req inventoryRequest, state *inventory
 	resourcesToCommit := is.resourcesToCommit(req.resources)
 	// create new registration if capacity available
 	reservation := newReservation(req.order, resourcesToCommit)
+	reservation.requested = req.resources.GetResourceUnits().Dup()
 
 	{
 		jReservation, _ := json.Marshal(req.resources.GetResourceUnits())
@@ -687,6 +688,7 @@ func findReservation(reservations []*reservation, order mtypes.OrderID) *reserva
 // group, committed the same way as a new reservation.
 func (is *inventoryService) resizedReservation(req resizeRequest) *reservation {
 	next := newReservation(req.order, is.resourcesToCommit(req.resources))
+	next.requested = req.resources.GetResourceUnits().Dup()
 	next.teeType = teeTypeFromResourceGroup(req.resources)
 
 	return next
@@ -737,19 +739,30 @@ func (is *inventoryService) handleResizeCheck(req resizeRequest, state *inventor
 }
 
 // handleResize swaps the reservation held for the order to the resized group
-// once the chain has applied the resize. The reservation is changed in place
-// so its kind and leased IP confirmation carry over.
-func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServiceState) {
+// once the chain has applied the resize, and reports whether the reservation
+// changed. The reservation is changed in place so its kind and leased IP
+// confirmation carry over. One that already holds the group's resources, as
+// after a resize of the price alone, is left as it is.
+func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServiceState) bool {
 	log := is.log.With("oid", req.order)
 
 	res := findReservation(state.reservations, req.order)
 	if res == nil {
 		inventoryRequestsCounter.WithLabelValues("resize", "not-found").Inc()
 		req.ch <- inventoryResponse{err: ErrReservationNotFound}
-		return
+		return false
 	}
 
 	next := is.resizedReservation(req)
+
+	if sameResources(res.requested, next.requested) {
+		log.Debug("reservation already holds the resized resources")
+		inventoryRequestsCounter.WithLabelValues("resize", "unchanged").Inc()
+		req.ch <- inventoryResponse{}
+		return false
+	}
+
+	res.requested = next.requested
 
 	if res.kind == ctypes.ReservationKindDurable {
 		// The volume's bytes are counted in its storage class rather than by
@@ -762,7 +775,7 @@ func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServ
 		log.Info("durable reservation resized")
 		inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
 		req.ch <- inventoryResponse{}
-		return
+		return true
 	}
 
 	// Adjust stamps the scheduler params per resource unit, and the GPU
@@ -782,18 +795,135 @@ func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServ
 	res.endpointQuantity = next.endpointQuantity
 	res.teeType = next.teeType
 
-	// Until the tenant's new manifest rolls the pods, the snapshot counts the
-	// old ones. Back to pending, the reservation is re-adjusted at its new
-	// size on every inventory update, on top of them, as during any redeploy;
-	// the deployment monitor marks it allocated again once the new pods are up.
-	if res.allocated {
-		res.allocated = false
+	if sameResources(res.deployment, res.requested) {
+		// The tenant's manifest at the new size reached the cluster before
+		// the chain's resize did: the reservation keeps following its
+		// deployment, allocated if those pods already reported deployed.
+		res.awaitingManifest = false
+		res.awaitingUntil = time.Time{}
+		is.setAllocated(res, res.deployed)
+	} else {
+		// Until the tenant's new manifest rolls the pods, the snapshot counts
+		// the old ones. Back to pending, the reservation is re-adjusted at
+		// its new size on every inventory update, on top of them, as during
+		// any redeploy, until the manifest at the new size reaches the
+		// cluster or the wait for it runs out (see expireManifestWaits).
+		is.setAllocated(res, false)
+		res.awaitingManifest = true
+		res.awaitingUntil = time.Time{}
+
+		if timeout := is.config.LeaseResizeManifestTimeout; timeout > 0 {
+			res.awaitingUntil = time.Now().Add(timeout)
+		}
+	}
+
+	log.Info("reservation resized", "allocated", res.allocated)
+	inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
+	req.ch <- inventoryResponse{}
+
+	return true
+}
+
+// setAllocated marks the reservation allocated or pending, taking its
+// external ports from the pool while it is allocated, and reports whether
+// that changed.
+func (is *inventoryService) setAllocated(res *reservation, allocated bool) bool {
+	if res.allocated == allocated {
+		return false
+	}
+
+	res.allocated = allocated
+
+	if allocated {
+		is.availableExternalPorts -= reservationCountEndpoints(res)
+	} else {
 		is.availableExternalPorts += reservationCountEndpoints(res)
 	}
 
-	log.Info("reservation resized")
-	inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
-	req.ch <- inventoryResponse{}
+	return true
+}
+
+// handleDeployment records the cluster's report on a lease's deployment on
+// its reservation, and reports whether the reservation's allocation changed.
+// A reservation is allocated while its deployment's pods are up and pending
+// while they are not, except while a resize waits for the tenant's manifest
+// at the new size: the pods from before the resize keep it pending.
+func (is *inventoryService) handleDeployment(res *reservation, ev event.ClusterDeployment) bool {
+	deployed := ev.Status == event.ClusterDeploymentDeployed
+
+	// a volume lease's deployment carries no manifest (see volumeProvisioner)
+	if res.kind == ctypes.ReservationKindDurable {
+		return is.setAllocated(res, deployed)
+	}
+
+	res.deployment = ev.Group.GetResourceUnits().Dup()
+	res.deployed = deployed
+
+	if res.awaitingManifest {
+		if !sameResources(res.deployment, res.requested) {
+			return is.setAllocated(res, false)
+		}
+
+		// the manifest at the new size reached the cluster: from here the
+		// reservation follows its deployment, as during any redeploy
+		res.awaitingManifest = false
+		res.awaitingUntil = time.Time{}
+	}
+
+	return is.setAllocated(res, deployed)
+}
+
+// expireManifestWaits ends the wait of each resized reservation whose tenant
+// has not sent the manifest at the new size within
+// LeaseResizeManifestTimeout, and reports whether any reservation's
+// allocation changed. The reservation then follows its deployment again: it
+// is allocated while the pods from before the resize are up.
+//
+// While a resize waits, the provider counts both the lease's running pods,
+// in the inventory snapshot, and its pending reservation at the new size, so
+// the tenant's roll is sure to fit. Once the wait ends it no longer holds the
+// difference: the snapshot counts only the old pods, and other leases may
+// take the room the new size needs. A roll that comes later may then not
+// fit: its pods wait for room, and if none frees up the deployment monitor
+// closes the lease as unstable, as after any failed redeploy.
+func (is *inventoryService) expireManifestWaits(state *inventoryServiceState, now time.Time) bool {
+	changed := false
+
+	for _, res := range state.reservations {
+		if !res.awaitingManifest || res.awaitingUntil.IsZero() || now.Before(res.awaitingUntil) {
+			continue
+		}
+
+		res.awaitingManifest = false
+		res.awaitingUntil = time.Time{}
+
+		is.log.Info("resized lease's manifest not received in time; reservation follows its deployment again",
+			"oid", res.OrderID(), "allocated", res.deployed)
+
+		if is.setAllocated(res, res.deployed) {
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+// nextManifestWaitEnd is the earliest end of a resize's wait for its
+// manifest, zero when none waits with a bound.
+func nextManifestWaitEnd(reservations []*reservation) time.Time {
+	var next time.Time
+
+	for _, res := range reservations {
+		if !res.awaitingManifest || res.awaitingUntil.IsZero() {
+			continue
+		}
+
+		if next.IsZero() || res.awaitingUntil.Before(next) {
+			next = res.awaitingUntil
+		}
+	}
+
+	return next
 }
 
 // volumeGrowth is the part of a resized volume group a durable reservation
@@ -868,6 +998,31 @@ func (is *inventoryService) run(ctx context.Context, reservationsArg []*reservat
 
 	t := timer.NewStoppedTimer()
 
+	// readjust has the inventory taken from the last snapshot again, with
+	// the pending reservations adjusted on top of it
+	readjust := func() {
+		if currinv == nil {
+			return
+		}
+
+		select {
+		case invupch <- currinv:
+		default:
+		}
+	}
+
+	// waitTimer fires when the first wait of a resize for its manifest ends
+	waitTimer := timer.NewStoppedTimer()
+	defer waitTimer.Stop()
+
+	armWaits := func() {
+		if next := nextManifestWaitEnd(state.reservations); !next.IsZero() {
+			waitTimer.Reset(time.Until(next))
+		} else {
+			waitTimer.Stop()
+		}
+	}
+
 	updateIPs := func() {
 		if is.clients.ip != nil {
 			reservech = nil
@@ -910,44 +1065,37 @@ loop:
 						continue
 					}
 
-					allocatedPrev := res.allocated
-					res.allocated = ev.Status == event.ClusterDeploymentDeployed
-
-					if res.allocated != allocatedPrev {
-						externalPortCount := reservationCountEndpoints(res)
-						if ev.Status == event.ClusterDeploymentDeployed {
-							is.availableExternalPorts -= externalPortCount
-						} else {
-							is.availableExternalPorts += externalPortCount
-						}
-
+					if is.handleDeployment(res, ev) {
 						is.log.Debug("reservation status update",
 							"oid", res.OrderID(),
 							"group_name", res.Resources().GetName(),
 							"allocated", res.allocated)
 
-						if currinv != nil {
-							select {
-							case invupch <- currinv:
-							default:
-							}
-						}
+						readjust()
 					}
 
 					break
 				}
 
+				armWaits()
 				updateIPs()
 			}
 		case <-t.C:
 			updateIPs()
+		case <-waitTimer.C:
+			if is.expireManifestWaits(state, time.Now()) {
+				readjust()
+			}
+
+			armWaits()
 		case req := <-reservech:
 			is.handleRequest(req, state)
 		case req := <-resizech:
 			if req.dryRun {
 				is.handleResizeCheck(req, state)
-			} else {
-				is.handleResize(req, state)
+			} else if is.handleResize(req, state) {
+				readjust()
+				armWaits()
 			}
 		case req := <-is.lookupch:
 			// lookup registration

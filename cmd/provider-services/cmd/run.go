@@ -124,6 +124,7 @@ const (
 	FlagVolumeTransferEndpoints          = "volume-transfer-endpoints"
 	FlagVolumeMigrationInterval          = "volume-migration-interval"
 	FlagManifestTimeout                  = "manifest-timeout"
+	FlagLeaseResizeManifestTimeout       = "lease-resize-manifest-timeout"
 	FlagMetricsListener                  = "metrics-listener"
 	FlagWithdrawalPeriod                 = "withdrawal-period"
 	FlagLeaseFundsMonitorInterval        = "lease-funds-monitor-interval"
@@ -250,6 +251,10 @@ func RunCmd() *cobra.Command {
 
 			if viper.GetDuration(FlagMonitorRetryPeriod) < 4*time.Second {
 				return fmt.Errorf(`flag "%s" value must be > "%s"`, FlagMonitorRetryPeriod, 4*time.Second) // nolint: err113
+			}
+
+			if viper.GetDuration(FlagLeaseResizeManifestTimeout) <= 0 {
+				return fmt.Errorf(`flag "%s" value must be > 0`, FlagLeaseResizeManifestTimeout) // nolint: err113
 			}
 
 			pconfigBackend := viper.GetString(FlagPersistentConfigBackend)
@@ -697,6 +702,7 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 	config.BidTimeout = bidTimeout
 	config.VolumeMoveBidTimeout = viper.GetDuration(FlagVolumeMoveBidTimeout)
 	config.ManifestTimeout = manifestTimeout
+	config.LeaseResizeManifestTimeout = viper.GetDuration(FlagLeaseResizeManifestTimeout)
 	if broadcastTimeout <= 0 {
 		logger.Warn("tx-broadcast-timeout must be positive, using default", "invalid", broadcastTimeout, "default", config.BroadcastTimeout)
 	} else {
