@@ -25,6 +25,8 @@ import (
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/testutil"
 
+	"github.com/akash-network/provider/bucket"
+	"github.com/akash-network/provider/bucket/buckettest"
 	"github.com/akash-network/provider/operator/storage/replication"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
 	afake "github.com/akash-network/provider/pkg/client/clientset/versioned/fake"
@@ -771,4 +773,99 @@ func TestRetentionRunsFromTheObservedCloseWithoutTheChainsOwn(t *testing.T) {
 			require.WithinDuration(t, time.Now().Add(168*time.Hour), uvol.Status.RetainedUntil.Time, time.Minute)
 		})
 	}
+}
+
+// makeOpScaffoldWithKube is makeOpScaffold over a cluster holding kobjs.
+func makeOpScaffoldWithKube(t *testing.T, chain ChainClient, kobjs, aobjs []runtime.Object) *opScaffold {
+	t.Helper()
+
+	s := makeOpScaffold(t, chain, aobjs)
+	s.op.kc = kfake.NewSimpleClientset(kobjs...)
+	s.op.reconciler.kc = s.op.kc
+
+	return s
+}
+
+func opClaimRequest(t *testing.T, s *opScaffold, ns, name string) int64 {
+	t.Helper()
+
+	pvc, err := s.op.kc.CoreV1().PersistentVolumeClaims(ns).Get(context.Background(), name, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	return pvc.Spec.Resources.Requests.Storage().Value()
+}
+
+// TestResyncChainGrowsAVolumeWhoseResizeWentUnseen: neither the daemon nor
+// the operator saw the lease resize, so only the chain knows the size the
+// tenant now pays for; the resync records it and the claim grows.
+func TestResyncChainGrowsAVolumeWhoseResizeWentUnseen(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{active: map[string]bool{lid.String(): true}, size: uint64(2 * testVolumeSize)}
+	s := makeOpScaffoldWithKube(t, chain,
+		[]runtime.Object{boundClaim(vol, testVolNS, testVolumeSize), testPVObj(vol, testVolNS, vol.Name)},
+		[]runtime.Object{vol})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+	require.Equal(t, strconv.FormatInt(2*testVolumeSize, 10), getOpVolume(t, s, vol.Name).Spec.Size)
+
+	require.NoError(t, s.op.reconcileAll(context.Background()))
+	require.Equal(t, 2*testVolumeSize, opClaimRequest(t, s, testVolNS, vol.Name))
+}
+
+func TestResyncChainGrowsABucketWhoseResizeWentUnseen(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := provisioned(testBucketVolume(t, lid, crd.VolumePhaseProvisioned), crd.VolumePhaseProvisioned)
+
+	chain := &fakeChainClient{active: map[string]bool{lid.String(): true}, size: 4194304}
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	fake := buckettest.NewFake()
+	s.op.reconciler.buckets = fake
+	ref := bucket.RefFor(vol.Name, vol.Spec.Owner, vol.Spec.VID)
+	ensureFakeBucket(t, fake, ref)
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+	require.NoError(t, s.op.reconcileAll(context.Background()))
+
+	require.Equal(t, int64(4194304), fake.Quota(ref))
+	require.Equal(t, "4194304", getOpVolume(t, s, vol.Name).Status.BucketSize)
+}
+
+func TestResyncChainNeverShrinksAVolume(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseAttached)
+	vol.Status.PVName = testPV
+
+	chain := &fakeChainClient{active: map[string]bool{lid.String(): true}, size: uint64(testVolumeSize / 2)}
+	s := makeOpScaffold(t, chain, []runtime.Object{vol})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+	require.Equal(t, vol.Spec.Size, getOpVolume(t, s, vol.Name).Spec.Size)
+	require.Equal(t, 1, chain.sizeCalls)
+}
+
+// TestResyncChainAsksTheSizeOfLiveVolumesOnly: a volume whose lease is gone,
+// or one an adoption moved to another deployment, has no size on chain to
+// catch up with.
+func TestResyncChainAsksTheSizeOfLiveVolumesOnly(t *testing.T) {
+	closed := testutil.LeaseID(t)
+	gone := testVolume(t, closed, crd.VolumePhaseRetained)
+	gone.Status.PVName = testPV
+	until := metav1.NewTime(time.Now().Add(time.Hour))
+	gone.Status.RetainedUntil = &until
+
+	adopted := testutil.LeaseID(t)
+	moving := testVolume(t, adopted, crd.VolumePhaseAdopting)
+	moving.Spec.GroupID.DSeq = strconv.FormatUint(adopted.DSeq+1, 10)
+
+	chain := &fakeChainClient{active: map[string]bool{adopted.String(): true}, size: uint64(2 * testVolumeSize)}
+	s := makeOpScaffold(t, chain, []runtime.Object{gone, moving})
+
+	require.NoError(t, s.op.resyncChain(context.Background()))
+
+	require.Zero(t, chain.sizeCalls)
+	require.Equal(t, moving.Spec.Size, getOpVolume(t, s, moving.Name).Spec.Size)
 }

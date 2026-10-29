@@ -320,8 +320,9 @@ func (op *storageOperator) reconcileAll(ctx context.Context) error {
 }
 
 // resyncChain compares every volume CRD against the chain's active-lease
-// set: a volume whose own lease is gone is stamped for retention, and a
-// stale attachment record is cleared. Missed events are healed here.
+// set: a volume whose own lease is gone is stamped for retention, a stale
+// attachment record is cleared, and a live volume's size is raised to what
+// its group holds on chain. Missed events are healed here.
 func (op *storageOperator) resyncChain(ctx context.Context) error {
 	if op.chain == nil {
 		return nil
@@ -347,18 +348,31 @@ func (op *storageOperator) resyncChain(ctx context.Context) error {
 			}
 		}
 
-		if lid, err := vol.Spec.LeaseID.FromCRD(); err == nil && !active[lid.String()] && volumeLeaseIsCurrent(vol, lid) {
-			switch {
-			case vol.Status.Phase == crd.VolumePhaseRetained,
-				vol.Status.Phase == crd.VolumePhaseReleasing,
-				vol.Status.Phase == crd.VolumePhaseAdopting:
-				// already accounted for or frozen
-			case vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil:
-				// its close is recorded
-			default:
-				if err := op.settleInactiveLease(ctx, vol, lid); err != nil {
-					op.log.Error("settling volume lease", "volume", vol.Name, "err", err)
-				}
+		lid, err := vol.Spec.LeaseID.FromCRD()
+		if err != nil || !volumeLeaseIsCurrent(vol, lid) {
+			continue
+		}
+
+		if active[lid.String()] {
+			// a resize both the daemon and the operator missed leaves the
+			// claim short of what the tenant pays for
+			if err := op.raiseSize(ctx, vol, lid); err != nil {
+				op.log.Error("catching up the volume's size", "volume", vol.Name, "err", err)
+			}
+
+			continue
+		}
+
+		switch {
+		case vol.Status.Phase == crd.VolumePhaseRetained,
+			vol.Status.Phase == crd.VolumePhaseReleasing,
+			vol.Status.Phase == crd.VolumePhaseAdopting:
+			// already accounted for or frozen
+		case vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil:
+			// its close is recorded
+		default:
+			if err := op.settleInactiveLease(ctx, vol, lid); err != nil {
+				op.log.Error("settling volume lease", "volume", vol.Name, "err", err)
 			}
 		}
 	}
@@ -574,24 +588,37 @@ func (op *storageOperator) applyLeaseResized(ctx context.Context, lid mv1.LeaseI
 			continue
 		}
 
-		size, err := op.chain.VolumeSize(ctx, lid.GroupID())
-		if err != nil {
-			return err
-		}
+		return op.raiseSize(ctx, vol, lid)
+	}
 
-		if cur, err := strconv.ParseUint(vol.Spec.Size, 10, 64); err == nil && size <= cur {
-			return nil
-		}
+	return nil
+}
 
-		uvol := vol.DeepCopy()
-		uvol.Spec.Size = strconv.FormatUint(size, 10)
-
-		op.log.Info("volume resize recorded", "volume", vol.Name, "size", uvol.Spec.Size)
-
-		_, err = op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
-
+// raiseSize records the size the chain holds for the group of the volume's
+// lease lid when it is larger than the recorded one; the reconciler then
+// grows the claim, or a bucket's quota. It never lowers the record, as a PV
+// only grows.
+func (op *storageOperator) raiseSize(ctx context.Context, vol *crd.Volume, lid mv1.LeaseID) error {
+	size, err := op.chain.VolumeSize(ctx, lid.GroupID())
+	if err != nil {
 		return err
 	}
+
+	if cur, err := strconv.ParseUint(vol.Spec.Size, 10, 64); err == nil && size <= cur {
+		return nil
+	}
+
+	uvol := vol.DeepCopy()
+	uvol.Spec.Size = strconv.FormatUint(size, 10)
+
+	op.log.Info("volume resize recorded", "volume", vol.Name, "size", uvol.Spec.Size)
+
+	updated, err := op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+
+	*vol = *updated
 
 	return nil
 }
