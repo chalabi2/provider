@@ -29,8 +29,10 @@ type VolumeConfig struct {
 	// exporting. Zero declines any order with replication terms.
 	MaxReplicas uint32
 	// GrowableClasses lists the volume classes whose StorageClass can expand
-	// a bound claim in place. A volume of any other class is held to its size:
-	// accepting its growth would bill the tenant for space the claim never gets.
+	// a bound claim in place. A mounted volume of any other class is held to
+	// its size: accepting its growth would bill the tenant for space the
+	// claim never gets. A bucket grows by a quota raise and needs no class
+	// here.
 	GrowableClasses []string
 	// BucketClasses lists the storage classes whose capacity backs bucket
 	// volumes, served from the provider's S3 server. Empty declines every

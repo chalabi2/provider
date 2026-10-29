@@ -317,6 +317,75 @@ func Test_LeaseResizeVolumeGrowNeedsAGrowableClass(t *testing.T) {
 	s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
 }
 
+// bucketResizeForTest evaluates growing a bucket from 10Gi to 25Gi on a
+// provider serving buckets on the test class, with headroom on the class
+// and no class it can expand a claim on.
+func bucketResizeForTest(t *testing.T, headroom uint64, configure func(*VolumeConfig)) (*resizeTestScaffold, sdk.Msg) {
+	t.Helper()
+
+	gspec := volumeGroupSpec()
+	bucketOrder(&gspec)
+
+	group := *volumeGroupForTest(t, gspec)
+	resources := withVolumeSize(group.GroupSpec.Resources, 25*unit.Gi)
+
+	volumes := VolumeConfig{
+		BucketClasses: []string{testVolumeClass},
+		MaxRetention:  7 * 24 * time.Hour,
+	}
+
+	if configure != nil {
+		configure(&volumes)
+	}
+
+	s := makeResizeForTest(t, group, resources, Config{
+		PricingStrategy: testBidPricingStrategy(50),
+		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
+		Volumes:         volumes,
+	})
+	s.r.pass = fixedAttrSignatureService{attrs: volumeCapabilities()}
+	s.r.storage = fakeStorageInventory{testVolumeClass: headroom}
+	s.cluster.On("CheckResize", s.lid.OrderID(), mock.Anything).Return(resources.Dup(), nil)
+
+	msg, err := s.r.evaluate(context.Background())
+	require.NoError(t, err)
+
+	return s, msg
+}
+
+// A bucket grows by a raise of its quota, which needs no claim expansion, so
+// no growable class is needed. The bucket gates and the headroom for the
+// growth still apply.
+func Test_LeaseResizeBucketGrowNeedsNoGrowableClass(t *testing.T) {
+	t.Run("growth fits", func(t *testing.T) {
+		s, msg := bucketResizeForTest(t, 20*unit.Gi, nil)
+
+		accept := requireMsgType[*mvbeta.MsgAcceptLeaseResize](t, []sdk.Msg{msg})
+		require.Equal(t, s.lid, accept.ID)
+		require.Equal(t, s.req.Digest, accept.Digest)
+		require.Equal(t, sdk.NewInt64DecCoin(sdkutil.DenomUact, 50), accept.Price)
+	})
+
+	t.Run("growth does not fit", func(t *testing.T) {
+		s, msg := bucketResizeForTest(t, 10*unit.Gi, nil)
+
+		requireReject(t, msg, s, mtypes.LeaseResizeRejectCapacity)
+		s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
+	})
+
+	t.Run("buckets no longer served on the class", func(t *testing.T) {
+		s, msg := bucketResizeForTest(t, 20*unit.Gi, func(volumes *VolumeConfig) {
+			volumes.BucketClasses = []string{"beta3"}
+			// growable for mounted volumes, which a bucket is not
+			volumes.Classes = []string{testVolumeClass}
+			volumes.GrowableClasses = []string{testVolumeClass}
+		})
+
+		requireReject(t, msg, s, mtypes.LeaseResizeRejectUnsupported)
+		s.cluster.AssertNotCalled(t, "CheckResize", mock.Anything, mock.Anything)
+	})
+}
+
 func Test_LeaseResizeIgnoresExpiredRequest(t *testing.T) {
 	group := computeGroupForResizeTest(t)
 

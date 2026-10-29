@@ -259,7 +259,9 @@ func (r *leaseResize) evaluate(ctx context.Context) (sdk.Msg, error) {
 
 // checkGates runs the bid gates on the resized group and returns the reject
 // for a group that fails them. A volume's headroom is checked for its growth
-// only: the provider already holds the old size.
+// only: the provider already holds the old size. A mounted volume can grow
+// only on a class that expands a bound claim in place; a bucket grows by a
+// quota raise, which needs no expansion.
 func (r *leaseResize) checkGates(ctx context.Context, group, resized *dtypes.Group) (sdk.Msg, error) {
 	gates := r.gates()
 
@@ -295,7 +297,7 @@ func (r *leaseResize) checkGates(ctx context.Context, group, resized *dtypes.Gro
 		growth = size - held
 	}
 
-	if growth > 0 && !gates.cfg.Volumes.ClassGrowable(class) {
+	if growth > 0 && !resized.GroupSpec.Volume.IsBucket() && !gates.cfg.Volumes.ClassGrowable(class) {
 		r.log.Info("declining lease resize: storage class cannot grow a volume in place", "class", class)
 		return r.reject(mtypes.LeaseResizeRejectUnsupported), nil
 	}
