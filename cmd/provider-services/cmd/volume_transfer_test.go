@@ -2,8 +2,12 @@ package cmd
 
 import (
 	"testing"
+	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 )
 
 func TestTransferEndpointIsTheHostURIHostAtTheTransferPort(t *testing.T) {
@@ -39,4 +43,22 @@ func TestTransferEndpointsRefuseWhatNamesNoEndpoint(t *testing.T) {
 		_, err := parseTransferEndpoints([]string{pair})
 		require.ErrorIs(t, err, errInvalidConfig, pair)
 	}
+}
+
+// TestVolumeCapsDefaultToTheChainsDefaults: a provider offering volumes
+// bids on the retention and replication terms the chain allows by default,
+// rather than declining every order that asks for any.
+func TestVolumeCapsDefaultToTheChainsDefaults(t *testing.T) {
+	cmd := &cobra.Command{}
+	require.NoError(t, addRunFlags(cmd))
+
+	retention, err := cmd.Flags().GetDuration(FlagVolumeMaxRetention)
+	require.NoError(t, err)
+	require.Equal(t, 720*time.Hour, retention)
+	require.Equal(t, dvbeta.DefaultMaxVolumeRetention, retention)
+
+	replicas, err := cmd.Flags().GetUint32(FlagVolumeMaxReplicas)
+	require.NoError(t, err)
+	require.Equal(t, uint32(4), replicas)
+	require.Equal(t, dvbeta.DefaultMaxVolumeReplicas, replicas)
 }

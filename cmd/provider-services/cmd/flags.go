@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 
 	sdkmath "cosmossdk.io/math"
@@ -212,12 +213,12 @@ func addRunFlags(cmd *cobra.Command) error {
 		return err
 	}
 
-	cmd.Flags().Duration(FlagVolumeMaxRetention, 0, "longest post-close retention window honored for standalone volumes (e.g. 168h). orders asking for more are declined")
+	cmd.Flags().Duration(FlagVolumeMaxRetention, dvbeta.DefaultMaxVolumeRetention, "longest post-close retention window honored for standalone volumes and buckets; orders asking for more are declined. defaults to the chain's default max_volume_retention, and matters only to a provider that offers volumes")
 	if err := viper.BindPFlag(FlagVolumeMaxRetention, cmd.Flags().Lookup(FlagVolumeMaxRetention)); err != nil {
 		return err
 	}
 
-	cmd.Flags().Uint32(FlagVolumeMaxReplicas, 0, "highest volume replica count supported. 0 declines orders with replication terms")
+	cmd.Flags().Uint32(FlagVolumeMaxReplicas, dvbeta.DefaultMaxVolumeReplicas, "highest max_replicas a volume order may ask for, each replica being a priced export duty; replica orders are bid on only when it is above 0, and 0 declines any replication terms. defaults to the chain's default max_volume_replicas, and matters only to a provider that offers volumes")
 	if err := viper.BindPFlag(FlagVolumeMaxReplicas, cmd.Flags().Lookup(FlagVolumeMaxReplicas)); err != nil {
 		return err
 	}
