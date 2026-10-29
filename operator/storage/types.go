@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"strings"
+	"time"
 
 	mtypes "pkg.akt.dev/go/node/market/v1"
 )
@@ -20,7 +21,16 @@ const (
 	// (local-path); leave off for network-attached storage (Ceph RBD).
 	FlagProvisionNodeHint = "provision-node-hint"
 
+	// FlagVolumeMoveHold bounds how long a volume that moved away is kept
+	// for the provider it moved to, past its close, whatever its retention.
+	FlagVolumeMoveHold = "volume-move-hold"
+
 	defaultVolumesNS = "akash-volumes"
+
+	// defaultMoveHold matches the daemon's default --volume-move-bid-timeout:
+	// the tenant may pick the next provider until a bid on the re-listed
+	// order times out.
+	defaultMoveHold = 7 * 24 * time.Hour
 )
 
 const (

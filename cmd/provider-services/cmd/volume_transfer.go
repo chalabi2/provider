@@ -150,7 +150,10 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 	}
 
 	return &volumeTransfer{
-		server: replication.NewServer(driver, chain, volumes, self, logger, replication.WithBuckets(buckets)),
+		server: replication.NewServer(driver, chain, volumes, self, logger,
+			replication.WithBuckets(buckets),
+			replication.WithExportRecorder(volumes),
+		),
 		migrations: replication.NewMigrations(replication.MigrationsConfig{
 			Volumes:   ac,
 			Namespace: ns,

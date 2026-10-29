@@ -18,6 +18,7 @@ import (
 	"cosmossdk.io/log"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
+	mv1 "pkg.akt.dev/go/node/market/v1"
 
 	"github.com/akash-network/provider/bucket"
 	"github.com/akash-network/provider/cluster/kube/builder"
@@ -140,15 +141,18 @@ func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 	switch vol.Status.Phase {
 	case crd.VolumePhaseExporting:
 		// migration export in flight: GC frozen, PV untouched. Once the
-		// lease has closed (retention stamped) and the deadline passed,
+		// lease has closed (retention stamped) and the move's hold ended,
 		// the export duty is over: thaw to Retained, and the next pass
 		// takes the single destruction path.
-		if vol.Status.RetainedUntil != nil && r.now().After(vol.Status.RetainedUntil.Time) {
-			vol.Status.Phase = crd.VolumePhaseRetained
-			return r.updateStatus(ctx, vol)
+		if released, err := r.moveReleased(ctx, vol); err != nil || !released {
+			return err
 		}
 
-		return nil
+		r.log.Info("moved volume released", "volume", vol.Name, "exported_to", vol.Status.ExportedTo)
+
+		vol.Status.Phase = crd.VolumePhaseRetained
+
+		return r.updateStatus(ctx, vol)
 	case crd.VolumePhaseReleasing:
 		// destruction stamped but deadline not reached (defensive; the
 		// teardown path stamps retainedUntil alongside)
@@ -182,6 +186,73 @@ func (r *reconciler) reconcile(ctx context.Context, vol *crd.Volume) error {
 	}
 
 	return r.ensureSize(ctx, vol)
+}
+
+// exportGrace is how long a volume that moved away is still kept once its
+// final copy reached the provider it moved to: time for that provider to
+// verify the copy, or to pull it again.
+const exportGrace = time.Hour
+
+// moveReleased reports whether a volume that moved away may go: its lease
+// closed for a move (retention stamped) and the hold that keeps it for the
+// provider it moved to ended. The hold ends exportGrace after a final
+// export to that provider ran to its end, but never before the retention
+// the tenant leased ends, and it ends at heldUntil, close + max(retention,
+// hold), whether a copy arrived or not. A volume that was never whole here
+// has nothing to give, so only its retention keeps it, as it does a record
+// stamped before holds existed.
+func (r *reconciler) moveReleased(ctx context.Context, vol *crd.Volume) (bool, error) {
+	if vol.Status.RetainedUntil == nil {
+		// the reclamation window: the lease is still paid
+		return false, nil
+	}
+
+	now := r.now()
+
+	if !now.After(vol.Status.RetainedUntil.Time) {
+		return false, nil
+	}
+
+	held := vol.Status.HeldUntil
+	if held == nil || vol.Incomplete() || now.After(held.Time) {
+		return true, nil
+	}
+
+	exported := vol.Status.ExportedAt
+	if exported == nil || !now.After(exported.Add(exportGrace)) {
+		return false, nil
+	}
+
+	return r.destinationHolds(ctx, vol)
+}
+
+// destinationHolds reports whether the provider a moved volume's final copy
+// went to still holds the volume's lease. One that gave up on the copy
+// lets its lease go, the order re-lists, and the next provider copies from
+// here again. Without the chain there is no telling, and the hold runs to
+// its bound.
+func (r *reconciler) destinationHolds(ctx context.Context, vol *crd.Volume) (bool, error) {
+	if r.chain == nil {
+		return false, nil
+	}
+
+	dseq, err := strconv.ParseUint(vol.Spec.GroupID.DSeq, 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid dseq %q: %s", ErrVolumeOperator, vol.Spec.GroupID.DSeq, err.Error())
+	}
+
+	leases, err := r.chain.VolumeLeases(ctx, vol.Spec.Owner, vol.Spec.VID)
+	if err != nil {
+		return false, err
+	}
+
+	for _, lease := range leases {
+		if lease.Provider == vol.Status.ExportedTo && lease.DSeq == dseq && lease.Policy.Vid == vol.Spec.VID && lease.State == mv1.LeaseActive {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // gcDue reports whether the volume passed its retention deadline. Exporting

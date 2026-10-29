@@ -6,11 +6,13 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/akash-network/provider/bucket"
 	crd "github.com/akash-network/provider/pkg/apis/akash.network/v2beta2"
@@ -33,13 +35,48 @@ type crdVolumeSource struct {
 	buckets bucket.Backend
 }
 
-var _ VolumeSource = (*crdVolumeSource)(nil)
+// VolumeRecords resolves local volumes from their records, and records
+// the final copies that reached the provider a volume moved to.
+type VolumeRecords interface {
+	VolumeSource
+	ExportRecorder
+}
+
+var _ VolumeRecords = (*crdVolumeSource)(nil)
 
 // NewCRDVolumeSource resolves volumes from the Volume CRDs in namespace
 // ns and their backing PVs, and buckets through buckets, which is nil on a
 // provider that serves none.
-func NewCRDVolumeSource(ac akashclientset.Interface, kc kubernetes.Interface, ns string, buckets bucket.Backend) VolumeSource {
+func NewCRDVolumeSource(ac akashclientset.Interface, kc kubernetes.Interface, ns string, buckets bucket.Backend) VolumeRecords {
 	return &crdVolumeSource{ac: ac, kc: kc, ns: ns, buckets: buckets}
+}
+
+// RecordExport keeps on the volume's record that its final copy reached
+// provider to at at.
+func (s *crdVolumeSource) RecordExport(ctx context.Context, owner, vid, to string, at time.Time) error {
+	vols := s.ac.AkashV2beta2().Volumes(s.ns)
+	name := crd.VolumeName(owner, vid)
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		vol, err := vols.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		if !vol.Matches(owner, vid) {
+			return fmt.Errorf("%w: volume %s identity mismatch", ErrReplication, name)
+		}
+
+		exported := metav1.NewTime(at)
+
+		uvol := vol.DeepCopy()
+		uvol.Status.ExportedTo = to
+		uvol.Status.ExportedAt = &exported
+
+		_, err = vols.Update(ctx, uvol, metav1.UpdateOptions{})
+
+		return err
+	})
 }
 
 func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (VolumeInfo, error) {

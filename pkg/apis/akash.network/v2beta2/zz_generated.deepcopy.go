@@ -1209,6 +1209,14 @@ func (in *VolumeStatus) DeepCopyInto(out *VolumeStatus) {
 		in, out := &in.SyncedAt, &out.SyncedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.HeldUntil != nil {
+		in, out := &in.HeldUntil, &out.HeldUntil
+		*out = (*in).DeepCopy()
+	}
+	if in.ExportedAt != nil {
+		in, out := &in.ExportedAt, &out.ExportedAt
+		*out = (*in).DeepCopy()
+	}
 	return
 }
 

@@ -67,6 +67,10 @@ type storageOperator struct {
 	chain      ChainClient
 	resync     time.Duration
 	flagState  common.PrepareFlagFn
+
+	// moveHold bounds how long a volume that moved away is kept for the
+	// provider it moved to: close + max(retention, moveHold)
+	moveHold time.Duration
 }
 
 func newStorageOperator(ctx context.Context, logger log.Logger, ns, volNS string, cfg common.OperatorConfig, chain ChainClient, resync time.Duration, nodeHint bool, buckets bucket.Backend) (*storageOperator, error) {
@@ -624,9 +628,11 @@ func (op *storageOperator) raiseSize(ctx context.Context, vol *crd.Volume, lid m
 }
 
 // stampExportingRetention starts the retention clock on a volume whose own
-// lease lid closed for a move, freezing it in Exporting: the destination
-// may still be pulling the final diff. The reconciler thaws the phase to
-// Retained once the deadline passes.
+// lease lid closed for a move, freezing it in Exporting: the provider it
+// moves to may still be pulling the final diff. It also bounds the hold
+// that keeps the volume for that provider whatever its retention, at
+// close + max(retention, moveHold). The reconciler thaws the phase to
+// Retained once the hold ends.
 func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd.Volume, lid mv1.LeaseID) error {
 	if vol.Status.Phase == crd.VolumePhaseExporting && vol.Status.RetainedUntil != nil {
 		return nil
@@ -641,11 +647,16 @@ func (op *storageOperator) stampExportingRetention(ctx context.Context, vol *crd
 	uvol.Status.Phase = crd.VolumePhaseExporting
 	uvol.Status.AttachedLease = ""
 
-	retainedUntil := metav1.NewTime(op.closedAt(ctx, lid).Add(retention))
+	closedAt := op.closedAt(ctx, lid)
+
+	retainedUntil := metav1.NewTime(closedAt.Add(retention))
 	uvol.Status.RetainedUntil = &retainedUntil
 
+	heldUntil := metav1.NewTime(closedAt.Add(max(retention, op.moveHold)))
+	uvol.Status.HeldUntil = &heldUntil
+
 	op.log.Info("exporting volume lease closed; retention clock started",
-		"volume", uvol.Name, "retained_until", retainedUntil)
+		"volume", uvol.Name, "retained_until", retainedUntil, "held_until", heldUntil)
 
 	updated, err := op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
 	if err != nil {

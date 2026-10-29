@@ -50,6 +50,7 @@ func Cmd() *cobra.Command {
 			}
 			resync := viper.GetDuration(FlagResyncInterval)
 			nodeHint := viper.GetBool(FlagProvisionNodeHint)
+			moveHold := viper.GetDuration(FlagVolumeMoveHold)
 
 			logger := ctxlog.LogcFromCtx(ctx).With("module", "operator-storage")
 
@@ -89,6 +90,8 @@ func Cmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			op.moveHold = moveHold
 
 			router := op.server.GetRouter()
 
@@ -138,6 +141,11 @@ func Cmd() *cobra.Command {
 
 	cmd.Flags().Bool(FlagProvisionNodeHint, false, "annotate provisioning claims with the selected node (required for node-constrained provisioners like local-path; leave off for Ceph RBD)")
 	if err := viper.BindPFlag(FlagProvisionNodeHint, cmd.Flags().Lookup(FlagProvisionNodeHint)); err != nil {
+		panic(err)
+	}
+
+	cmd.Flags().Duration(FlagVolumeMoveHold, defaultMoveHold, "longest a volume that moved away is kept after its lease closed, for the provider it moved to: it goes once that provider has its final copy, but never before its retention ends, and at the latest at close + max(retention, hold). Defaults to the provider daemon's --volume-move-bid-timeout")
+	if err := viper.BindPFlag(FlagVolumeMoveHold, cmd.Flags().Lookup(FlagVolumeMoveHold)); err != nil {
 		panic(err)
 	}
 

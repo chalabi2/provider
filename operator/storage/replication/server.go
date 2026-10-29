@@ -111,6 +111,13 @@ type VolumeSource interface {
 	Resolve(ctx context.Context, owner, vid string) (VolumeInfo, error)
 }
 
+// ExportRecorder keeps, on a volume's record, that its final copy reached
+// the provider it moved to: the volume is held for that provider until
+// then, and a restart must not forget it arrived.
+type ExportRecorder interface {
+	RecordExport(ctx context.Context, owner, vid, to string, at time.Time) error
+}
+
 // PeerIDFn extracts the authenticated peer's on-chain address from the
 // request context. The default reads the mTLS peer certificate's common
 // name - the x/cert identity the TLS layer already validated against
@@ -132,6 +139,9 @@ type Server struct {
 	log       log.Logger
 	// buckets serves the objects of moving buckets; nil serves none
 	buckets bucket.Backend
+	// exports records the final copies that reached the provider a volume
+	// moved to; nil records none
+	exports ExportRecorder
 
 	// replicaEvery spaces the snapshots taken for replicas: one asking
 	// sooner gets the last one
@@ -169,6 +179,12 @@ func WithChunkSize(size int) ServerOpt {
 // WithBuckets serves the objects of the buckets that move away.
 func WithBuckets(buckets bucket.Backend) ServerOpt {
 	return func(s *Server) { s.buckets = buckets }
+}
+
+// WithExportRecorder records each final copy that reached the provider a
+// volume moved to.
+func WithExportRecorder(exports ExportRecorder) ServerOpt {
+	return func(s *Server) { s.exports = exports }
 }
 
 // withClock overrides the server's clock (tests).
@@ -336,7 +352,26 @@ func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_Expo
 		return status.Error(codes.Internal, err.Error())
 	}
 
+	s.recordExport(ctx, auth, req.Owner, req.Vid, req.Requester)
+
 	return nil
+}
+
+// recordExport keeps that a final export ran to its end: the provider
+// holding the volume's new lease has its last state. A replica's pulls,
+// and the rounds before the volume went final, are no such copy.
+func (s *Server) recordExport(ctx context.Context, auth exportAuth, owner, vid, requester string) {
+	if s.exports == nil || auth.replica || auth.finalKey == "" {
+		return
+	}
+
+	if err := s.exports.RecordExport(ctx, owner, vid, requester, s.now()); err != nil {
+		// the volume is then held to its bound
+		s.log.Error("recording the volume's final copy", "volume", auth.info.Ref.Name, "requester", requester, "err", err)
+		return
+	}
+
+	s.log.Info("volume final copy sent whole", "volume", auth.info.Ref.Name, "requester", requester)
 }
 
 // ExportObjects streams every object of a bucket that moves to the
@@ -379,6 +414,8 @@ func (s *Server) ExportObjects(req *vtv1.ExportObjectsRequest, stream vtv1.Volum
 	}
 
 	s.log.Info("bucket export done", "volume", info.Ref.Name, "requester", req.Requester, "objects", sent, "bytes", size)
+
+	s.recordExport(ctx, auth, req.Owner, req.Vid, req.Requester)
 
 	return nil
 }

@@ -717,3 +717,11 @@ spec:
                   type: boolean
                 promoted:
                   type: boolean
+                heldUntil:
+                  type: string
+                  format: date-time
+                exportedTo:
+                  type: string
+                exportedAt:
+                  type: string
+                  format: date-time

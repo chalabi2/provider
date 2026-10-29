@@ -124,6 +124,9 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 			uobj.Status.RetainedUntil = nil
 			uobj.Status.AttachedLease = ""
 			uobj.Status.LocalCopy = false
+			uobj.Status.HeldUntil = nil
+			uobj.Status.ExportedTo = ""
+			uobj.Status.ExportedAt = nil
 
 			if !obj.Status.LocalCopy {
 				uobj.Spec.ImportFrom = obj.Spec.ImportFrom

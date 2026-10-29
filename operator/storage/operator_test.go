@@ -607,6 +607,10 @@ func TestStorageCmdRegistered(t *testing.T) {
 	require.Equal(t, "storage", cmd.Use)
 	require.NotNil(t, cmd.Flags().Lookup(FlagVolumesNS))
 	require.NotNil(t, cmd.Flags().Lookup(FlagResyncInterval))
+
+	hold, err := cmd.Flags().GetDuration(FlagVolumeMoveHold)
+	require.NoError(t, err)
+	require.Equal(t, 168*time.Hour, hold, "the provider daemon's default --volume-move-bid-timeout")
 }
 
 func getOpVolume(t *testing.T, s *opScaffold, name string) *crd.Volume {

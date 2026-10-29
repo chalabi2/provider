@@ -202,6 +202,9 @@ func TestDeployVolumeRelistedOrderResetsTheRecord(t *testing.T) {
 	obj.Status.PVName = "pvc-volume-test"
 	obj.Status.AttachedLease = "attached-before"
 	obj.Status.RetainedUntil = &until
+	obj.Status.HeldUntil = &until
+	obj.Status.ExportedTo = "akash1destination"
+	obj.Status.ExportedAt = &until
 	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
@@ -217,6 +220,9 @@ func TestDeployVolumeRelistedOrderResetsTheRecord(t *testing.T) {
 	require.Equal(t, "pvc-volume-test", obj.Status.PVName)
 	require.Empty(t, obj.Status.AttachedLease)
 	require.Nil(t, obj.Status.RetainedUntil)
+	require.Nil(t, obj.Status.HeldUntil, "the hold of the earlier move is over")
+	require.Empty(t, obj.Status.ExportedTo)
+	require.Nil(t, obj.Status.ExportedAt)
 	require.Equal(t, "akash1previous", obj.Spec.ImportFrom, "a copy that never finished keeps its source")
 	require.False(t, obj.Status.LocalCopy)
 }

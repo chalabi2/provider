@@ -45,8 +45,17 @@ func (r *reconciler) reconcileBucket(ctx context.Context, vol *crd.Volume) error
 			return nil
 		}
 
-		if r.now().After(vol.Status.RetainedUntil.Time) {
+		// the move's hold ended: the bucket goes the single destruction way
+		released, err := r.moveReleased(ctx, vol)
+		if err != nil {
+			return err
+		}
+
+		if released {
+			r.log.Info("moved bucket released", "volume", vol.Name, "exported_to", vol.Status.ExportedTo)
+
 			vol.Status.Phase = crd.VolumePhaseRetained
+
 			return r.updateStatus(ctx, vol)
 		}
 

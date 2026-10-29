@@ -112,7 +112,7 @@ func bucketScaffold(t *testing.T) *bucketWorld {
 
 // bucketScaffoldNamed is bucketScaffold for the bucket of the Volume CRD
 // named name.
-func bucketScaffoldNamed(t *testing.T, name string) *bucketWorld {
+func bucketScaffoldNamed(t *testing.T, name string, opts ...ServerOpt) *bucketWorld {
 	t.Helper()
 
 	w := &bucketWorld{
@@ -136,9 +136,11 @@ func bucketScaffoldNamed(t *testing.T, name string) *bucketWorld {
 		w.vols,
 		authzExporter,
 		testutil.Logger(t),
-		WithPeerID(func(context.Context) (string, error) { return authzRequester, nil }),
-		WithChunkSize(5), // tiny chunks exercise the framing
-		WithBuckets(w.src),
+		append([]ServerOpt{
+			WithPeerID(func(context.Context) (string, error) { return authzRequester, nil }),
+			WithChunkSize(5), // tiny chunks exercise the framing
+			WithBuckets(w.src),
+		}, opts...)...,
 	)
 	w.client = &inprocClient{srv: srv}
 

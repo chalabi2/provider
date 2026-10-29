@@ -206,3 +206,15 @@ func TestVolumeStatusDeepCopiesSyncedAt(t *testing.T) {
 
 	require.Equal(t, synced, *vol.Status.SyncedAt)
 }
+
+func TestVolumeStatusDeepCopiesTheMoveHold(t *testing.T) {
+	at := metav1.Now()
+	vol := &Volume{Status: VolumeStatus{HeldUntil: &at, ExportedAt: &at, ExportedTo: "akash1destination"}}
+
+	cp := vol.DeepCopy()
+	cp.Status.HeldUntil.Time = cp.Status.HeldUntil.Add(time.Hour)
+	cp.Status.ExportedAt.Time = cp.Status.ExportedAt.Add(time.Hour)
+
+	require.Equal(t, at, *vol.Status.HeldUntil)
+	require.Equal(t, at, *vol.Status.ExportedAt)
+}

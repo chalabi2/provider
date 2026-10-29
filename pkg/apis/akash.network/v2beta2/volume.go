@@ -137,6 +137,14 @@ type VolumeStatus struct {
 	// data may hold writes the primary never had, so nothing is copied over
 	// it again.
 	Promoted bool `json:"promoted,omitempty"`
+	// HeldUntil is, for a volume that moved away, the latest it is kept for
+	// the provider it moved to: its close + max(retention, the move hold).
+	HeldUntil *metav1.Time `json:"heldUntil,omitempty"`
+	// ExportedTo is the provider a volume that moved away last went to
+	// whole: a final export to the holder of its new lease ran to its end.
+	ExportedTo string `json:"exportedTo,omitempty"`
+	// ExportedAt is when that export ended.
+	ExportedAt *metav1.Time `json:"exportedAt,omitempty"`
 }
 
 // VolumeName derives the deterministic CRD object name for a volume:
