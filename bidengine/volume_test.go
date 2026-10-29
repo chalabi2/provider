@@ -14,6 +14,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	inventoryV1 "pkg.akt.dev/go/inventory/v1"
+	clientmocks "pkg.akt.dev/go/mocks/node/client"
+	marketmocks "pkg.akt.dev/go/mocks/node/client/market"
 	audittypes "pkg.akt.dev/go/node/audit/v1"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
@@ -146,9 +148,40 @@ func volumeGroupForTest(t *testing.T, gspec dvbeta.GroupSpec) *dvbeta.Group {
 	}
 }
 
+// volumeChain answers the chain reads of volume orders: the leases on the
+// volume group a replica names as its primary.
+type volumeChain struct {
+	client *clientmocks.Client
+	market *marketmocks.QueryClient
+}
+
+func newVolumeChain(leases []mvbeta.QueryLeaseResponse, err error) *volumeChain {
+	market := &marketmocks.QueryClient{}
+	if err != nil {
+		market.On("Leases", mock.Anything, mock.Anything).Return(nil, err)
+	} else {
+		market.On("Leases", mock.Anything, mock.Anything).Return(&mvbeta.QueryLeasesResponse{Leases: leases}, nil)
+	}
+
+	query := &clientmocks.QueryClient{}
+	query.On("Market").Return(market)
+
+	client := &clientmocks.Client{}
+	client.On("Query").Return(query)
+
+	return &volumeChain{client: client, market: market}
+}
+
 // makeShouldBidOrder builds a bare order sufficient for exercising the
-// shouldBid/shouldBidVolume gates directly.
+// shouldBid/shouldBidVolume gates directly, on a chain where no replica's
+// primary is leased here.
 func makeShouldBidOrder(t *testing.T, cfg Config, pass ProviderAttrSignatureService, storage StorageInventory, volumes VolumeLookup) *order {
+	t.Helper()
+
+	return makeShouldBidOrderOnChain(t, cfg, pass, storage, volumes, newVolumeChain(nil, nil))
+}
+
+func makeShouldBidOrderOnChain(t *testing.T, cfg Config, pass ProviderAttrSignatureService, storage StorageInventory, volumes VolumeLookup, chain *volumeChain) *order {
 	t.Helper()
 
 	myLog := testutil.Logger(t)
@@ -161,7 +194,7 @@ func makeShouldBidOrder(t *testing.T, cfg Config, pass ProviderAttrSignatureServ
 
 	return &order{
 		cfg:     cfg,
-		session: session.New(myLog, nil, myProvider, 0).ForModule("bidengine-order"),
+		session: session.New(myLog, chain.client, myProvider, 0).ForModule("bidengine-order"),
 		log:     myLog,
 		pass:    pass,
 		storage: storage,
@@ -844,4 +877,83 @@ func Test_RelistedVolumeBidFoundAfterRestartKeepsTheMoveBidTimeout(t *testing.T)
 
 	order.lc.Shutdown(nil)
 	<-order.lc.Done()
+}
+
+// replicaShouldBid runs the volume gates on a replica order of the volume
+// group primary, on chain.
+func replicaShouldBid(t *testing.T, primary dv1.VolumeRef, chain *volumeChain) (*order, bool, error) {
+	t.Helper()
+
+	gspec := volumeGroupSpec()
+	gspec.Volume.ReplicaOf = &primary
+
+	cfg := Config{
+		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
+		Volumes:         defaultVolumeConfig(),
+	}
+	cfg.Volumes.MaxReplicas = 4
+
+	order := makeShouldBidOrderOnChain(t, cfg, fixedAttrSignatureService{attrs: volumeCapabilities()},
+		fakeStorageInventory{testVolumeClass: 100 * unit.Gi}, &fakeVolumeLookup{}, chain)
+
+	shouldBid, err := order.shouldBidVolume(context.Background(), volumeGroupForTest(t, gspec))
+
+	return order, shouldBid, err
+}
+
+// Test_ShouldNotBidReplicaBesideItsPrimary: a replica on the provider that
+// holds its primary adds no redundancy and could never sync.
+func Test_ShouldNotBidReplicaBesideItsPrimary(t *testing.T) {
+	primary := dv1.VolumeRef{Owner: testutil.AccAddress(t).String(), DSeq: 5, GSeq: 1, Name: "data"}
+
+	chain := newVolumeChain([]mvbeta.QueryLeaseResponse{{Lease: mtypes.Lease{State: mtypes.LeaseActive}}}, nil)
+
+	order, shouldBid, err := replicaShouldBid(t, primary, chain)
+	require.NoError(t, err)
+	require.False(t, shouldBid)
+
+	// asked for this provider's active lease on the very group named
+	chain.market.AssertCalled(t, "Leases", mock.Anything, &mvbeta.QueryLeasesRequest{
+		Filters: mtypes.LeaseFilters{
+			Owner:    primary.Owner,
+			DSeq:     primary.DSeq,
+			GSeq:     primary.GSeq,
+			Provider: order.session.Provider().Address().String(),
+			State:    mtypes.LeaseActive.String(),
+		},
+	})
+}
+
+func Test_ShouldBidReplicaOfAPrimaryLeasedElsewhere(t *testing.T) {
+	primary := dv1.VolumeRef{Owner: testutil.AccAddress(t).String(), DSeq: 5, GSeq: 1, Name: "data"}
+
+	_, shouldBid, err := replicaShouldBid(t, primary, newVolumeChain(nil, nil))
+	require.NoError(t, err)
+	require.True(t, shouldBid)
+}
+
+func Test_ShouldNotBidReplicaWhileTheChainCannotSayWhereItsPrimaryIs(t *testing.T) {
+	primary := dv1.VolumeRef{Owner: testutil.AccAddress(t).String(), DSeq: 5, GSeq: 1, Name: "data"}
+
+	_, shouldBid, err := replicaShouldBid(t, primary, newVolumeChain(nil, errors.New("node unreachable")))
+	require.Error(t, err)
+	require.False(t, shouldBid)
+}
+
+func Test_ShouldBidVolumeWithoutAskingWhereAPrimaryIs(t *testing.T) {
+	chain := newVolumeChain(nil, nil)
+
+	cfg := Config{
+		MaxGroupVolumes: constants.DefaultMaxGroupVolumes,
+		Volumes:         defaultVolumeConfig(),
+	}
+
+	order := makeShouldBidOrderOnChain(t, cfg, fixedAttrSignatureService{attrs: volumeCapabilities()},
+		fakeStorageInventory{testVolumeClass: 100 * unit.Gi}, &fakeVolumeLookup{}, chain)
+
+	shouldBid, err := order.shouldBidVolume(context.Background(), volumeGroupForTest(t, volumeGroupSpec()))
+	require.NoError(t, err)
+	require.True(t, shouldBid)
+
+	chain.market.AssertNotCalled(t, "Leases", mock.Anything, mock.Anything)
 }

@@ -7,6 +7,8 @@ import (
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	mtypes "pkg.akt.dev/go/node/market/v1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	provider "pkg.akt.dev/go/provider/v1"
 	"pkg.akt.dev/go/sdl"
 )
@@ -187,6 +189,20 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 		return ok, err
 	}
 
+	// a replica beside its primary adds no redundancy, and it never syncs:
+	// a provider does not export a volume to itself
+	if ref := group.GroupSpec.Volume.ReplicaOf; ref != nil {
+		here, err := o.primaryLeasedHere(ctx, ref)
+		if err != nil {
+			return false, err
+		}
+
+		if here {
+			o.log.Debug("unable to fulfill: replica of a volume this provider holds", "primary", ref.String())
+			return false, nil
+		}
+	}
+
 	if err := o.waitForInventory(ctx); err != nil {
 		return false, err
 	}
@@ -212,6 +228,25 @@ func (o *order) shouldBidVolume(ctx context.Context, group *dtypes.Group) (bool,
 	}
 
 	return true, nil
+}
+
+// primaryLeasedHere reports whether this provider holds the active lease of
+// the volume group ref names, as the chain has it.
+func (o *order) primaryLeasedHere(ctx context.Context, ref *dv1.VolumeRef) (bool, error) {
+	resp, err := o.session.Client().Query().Market().Leases(ctx, &mvbeta.QueryLeasesRequest{
+		Filters: mtypes.LeaseFilters{
+			Owner:    ref.Owner,
+			DSeq:     ref.DSeq,
+			GSeq:     ref.GSeq,
+			Provider: o.session.Provider().Address().String(),
+			State:    mtypes.LeaseActive.String(),
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return len(resp.Leases) > 0, nil
 }
 
 // waitForInventory holds a volume order until the first inventory snapshot
