@@ -607,3 +607,56 @@ func getOpVolume(t *testing.T, s *opScaffold, name string) *crd.Volume {
 
 	return vol
 }
+
+// TestApplyAttachmentPromotesAReplica: the chain's attach event, which
+// usually reaches the operator before the daemon attaches, promotes a
+// replica just as AttachVolume does.
+func TestApplyAttachmentPromotesAReplica(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	computeLid := testutil.LeaseID(t)
+
+	vol := testVolume(t, lid, crd.VolumePhaseProvisioned)
+	vol.Spec.ReplicaOf = dv1.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq + 1, GSeq: 1, Name: "primary-data"}.String()
+	vol.Status.PVName = testPV
+
+	plainLid := testutil.LeaseID(t)
+	plain := testVolume(t, plainLid, crd.VolumePhaseProvisioned)
+	plain.Status.PVName = testPV
+
+	s := makeOpScaffold(t, nil, []runtime.Object{vol, plain})
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventVolumeAttached{
+		LeaseID: computeLid,
+		Volume:  dv1.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq, GSeq: lid.GSeq, Name: testVID},
+	}))
+
+	stored := getOpVolume(t, s, vol.Name)
+	require.Equal(t, computeLid.String(), stored.Status.AttachedLease)
+	require.True(t, stored.Status.Promoted)
+
+	require.NoError(t, s.op.applyChainEvent(context.Background(), &mv1.EventVolumeAttached{
+		LeaseID: computeLid,
+		Volume:  dv1.VolumeRef{Owner: plainLid.Owner, DSeq: plainLid.DSeq, GSeq: plainLid.GSeq, Name: testVID},
+	}))
+
+	require.False(t, getOpVolume(t, s, plain.Name).Status.Promoted, "a volume that is no replica has nothing to promote")
+}
+
+func TestVolumeStateReportsAReplica(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	vol := testVolume(t, lid, crd.VolumePhaseImporting)
+	vol.Spec.ReplicaOf = dv1.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq + 1, GSeq: 1, Name: "primary-data"}.String()
+
+	state := volumeState(vol)
+	require.Equal(t, vol.Spec.ReplicaOf, state.ReplicaOf)
+	require.True(t, state.Syncing, "no copy landed yet")
+	require.Empty(t, state.SyncedAt)
+
+	synced := metav1.NewTime(time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC))
+	vol.Status.SyncedAt = &synced
+	vol.Status.Phase = crd.VolumePhaseProvisioned
+
+	state = volumeState(vol)
+	require.False(t, state.Syncing)
+	require.Equal(t, "2026-10-29T12:00:00Z", state.SyncedAt)
+}

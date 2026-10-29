@@ -7,10 +7,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
@@ -500,4 +502,186 @@ func TestTeardownLeaseLeavesVolumeObjects(t *testing.T) {
 	// the Volume CRD survives
 	_, err = kc.VolumeStatus(context.Background(), testVolumeRef(lid))
 	require.NoError(t, err)
+}
+
+// testPrimaryRef is the volume a replica of lid's owner follows.
+func testPrimaryRef(lid mtypes.LeaseID) dtypes.VolumeRef {
+	return dtypes.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq + 1000, GSeq: 1, Name: "primary-data"}
+}
+
+// testReplicaGroup is a volume group that follows testPrimaryRef.
+func testReplicaGroup(t *testing.T, lid mtypes.LeaseID) *dvbeta.Group {
+	t.Helper()
+
+	group := testVolumeGroup(t, lid, dtypes.VolumeReclaimRetain)
+	primary := testPrimaryRef(lid)
+	group.GroupSpec.Volume.ReplicaOf = &primary
+
+	return group
+}
+
+// deployReplica records a replica volume lease, as won, and returns its ref.
+func deployReplica(t *testing.T, kc *client) (dtypes.VolumeRef, mtypes.LeaseID) {
+	t.Helper()
+
+	lid := testutil.LeaseID(t)
+
+	require.NoError(t, kc.DeployVolume(context.Background(), lid, testReplicaGroup(t, lid)))
+
+	return testVolumeRef(lid), lid
+}
+
+func setVolume(t *testing.T, kc *client, ref dtypes.VolumeRef, fn func(*crd.Volume)) {
+	t.Helper()
+
+	obj, err := kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+
+	fn(obj)
+
+	_, err = kc.ac.AkashV2beta2().Volumes(testKubeClientNs).Update(context.Background(), obj, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+func TestDeployVolumeRecordsTheReplicasPrimary(t *testing.T) {
+	kc := volumeClientForTest(t, nil, nil)
+	ref, lid := deployReplica(t, kc)
+
+	obj, err := kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, testPrimaryRef(lid).String(), obj.Spec.ReplicaOf)
+	require.True(t, obj.Status.Syncing, "a replica holds nothing of its primary before its first copy")
+	require.True(t, obj.AwaitsFirstCopy())
+}
+
+func TestDeployVolumeRefusesACRDThatDropsTheReplicasPrimary(t *testing.T) {
+	kc := volumeClientForTest(t, nil, nil)
+	prune := func(action ktesting.Action) (bool, runtime.Object, error) {
+		switch action := action.(type) {
+		case ktesting.CreateAction:
+			action.GetObject().(*crd.Volume).Spec.ReplicaOf = ""
+		case ktesting.UpdateAction:
+			action.GetObject().(*crd.Volume).Spec.ReplicaOf = ""
+		}
+
+		return false, nil, nil
+	}
+	kc.ac.(*afake.Clientset).PrependReactor("create", "volumes", prune)
+	kc.ac.(*afake.Clientset).PrependReactor("update", "volumes", prune)
+
+	lid := testutil.LeaseID(t)
+
+	err := kc.DeployVolume(context.Background(), lid, testReplicaGroup(t, lid))
+	require.ErrorIs(t, err, kubeclienterrors.ErrVolumeCRDOutdated)
+
+	// a volume that is no replica has nothing to lose
+	other := testutil.LeaseID(t)
+	other.Owner = testutil.AccAddress(t).String()
+	require.NoError(t, kc.DeployVolume(context.Background(), other, testVolumeGroup(t, other, dtypes.VolumeReclaimRetain)))
+}
+
+func TestAttachVolumeRefusesAReplicaWithoutAWholeCopy(t *testing.T) {
+	for name, set := range map[string]func(*crd.Volume){
+		"first copy pending": func(vol *crd.Volume) {
+			vol.Status.Phase = crd.VolumePhaseImporting
+		},
+		"sync round writing it": func(vol *crd.Volume) {
+			synced := metav1.Now()
+			vol.Status.SyncedAt = &synced
+			vol.Status.Phase = crd.VolumePhaseProvisioned
+		},
+		"first copy pending, record not marked": func(vol *crd.Volume) {
+			vol.Status.Syncing = false
+			vol.Status.Phase = crd.VolumePhaseProvisioned
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			kc := volumeClientForTest(t, nil, nil)
+			ref, lid := deployReplica(t, kc)
+			setVolume(t, kc, ref, set)
+
+			computeLid := testutil.LeaseID(t)
+			computeLid.Owner = lid.Owner
+
+			require.ErrorIs(t, kc.AttachVolume(context.Background(), computeLid, ref), kubeclienterrors.ErrVolumeSyncing)
+
+			obj, err := kc.VolumeStatus(context.Background(), ref)
+			require.NoError(t, err)
+			require.Empty(t, obj.Status.AttachedLease)
+			require.False(t, obj.Status.Promoted)
+		})
+	}
+}
+
+func TestAttachVolumePromotesAReplica(t *testing.T) {
+	kc := volumeClientForTest(t, nil, nil)
+	ref, lid := deployReplica(t, kc)
+	setVolume(t, kc, ref, func(vol *crd.Volume) {
+		synced := metav1.Now()
+		vol.Status.SyncedAt = &synced
+		vol.Status.Syncing = false
+		vol.Status.Phase = crd.VolumePhaseProvisioned
+	})
+
+	computeLid := testutil.LeaseID(t)
+	computeLid.Owner = lid.Owner
+
+	require.NoError(t, kc.AttachVolume(context.Background(), computeLid, ref))
+
+	obj, err := kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, computeLid.String(), obj.Status.AttachedLease)
+	require.True(t, obj.Status.Promoted)
+
+	// detached, it stays promoted: nothing copies over it again
+	require.NoError(t, kc.DetachVolume(context.Background(), computeLid, ref))
+
+	obj, err = kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	require.True(t, obj.Status.Promoted)
+}
+
+// TestAttachVolumeNeverAttachesOverARoundThatBeganMeanwhile: a sync round
+// marks the record between AttachVolume's read and its write. The write
+// conflicts, and the attach reads the record again and refuses.
+func TestAttachVolumeNeverAttachesOverARoundThatBeganMeanwhile(t *testing.T) {
+	kc := volumeClientForTest(t, nil, nil)
+	ref, lid := deployReplica(t, kc)
+	setVolume(t, kc, ref, func(vol *crd.Volume) {
+		synced := metav1.Now()
+		vol.Status.SyncedAt = &synced
+		vol.Status.Syncing = false
+		vol.Status.Phase = crd.VolumePhaseProvisioned
+	})
+
+	fake := kc.ac.(*afake.Clientset)
+	raced := false
+
+	fake.PrependReactor("update", "volumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if raced {
+			return false, nil, nil
+		}
+
+		raced = true
+
+		// the round's write lands first
+		stored, err := fake.Tracker().Get(crd.SchemeGroupVersion.WithResource("volumes"), testKubeClientNs, crd.VolumeName(ref.Owner, ref.Name))
+		require.NoError(t, err)
+
+		round := stored.(*crd.Volume).DeepCopy()
+		round.Status.Syncing = true
+		require.NoError(t, fake.Tracker().Update(crd.SchemeGroupVersion.WithResource("volumes"), round, testKubeClientNs))
+
+		return true, nil, kerrors.NewConflict(crd.Resource("volumes"), round.Name, nil)
+	})
+
+	computeLid := testutil.LeaseID(t)
+	computeLid.Owner = lid.Owner
+
+	require.ErrorIs(t, kc.AttachVolume(context.Background(), computeLid, ref), kubeclienterrors.ErrVolumeSyncing)
+
+	obj, err := kc.VolumeStatus(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, obj.Status.AttachedLease)
+	require.False(t, obj.Status.Promoted)
 }

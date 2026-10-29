@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	vtv1 "pkg.akt.dev/go/volume/v1"
 )
@@ -91,11 +92,20 @@ type Syncer struct {
 	last string
 	// final records that last is the source's final snapshot.
 	final bool
+	// taken is when last was taken at the source.
+	taken time.Time
 }
 
 // Last returns the last applied snapshot id ("" before the first sync).
 func (s *Syncer) Last() string {
 	return s.last
+}
+
+// Taken returns when the last applied snapshot was taken at the source, as
+// the source's Status dated it: what was applied is as old as that. Zero
+// before the first sync.
+func (s *Syncer) Taken() time.Time {
+	return s.taken
 }
 
 // Final reports whether the last round left this side holding the source's
@@ -118,6 +128,9 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// the source dates its snapshot by its age, so no clock is compared
+	taken := time.Now().Add(-time.Duration(st.SyncLagSeconds) * time.Second)
 
 	if st.LatestSnapshot == "" || st.LatestSnapshot == s.last {
 		s.final = st.Final && st.LatestSnapshot != ""
@@ -201,6 +214,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) (string, error) {
 
 	s.last = st.LatestSnapshot
 	s.final = st.Final
+	s.taken = taken
 
 	return st.LatestSnapshot, nil
 }

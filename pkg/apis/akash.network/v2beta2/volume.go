@@ -97,6 +97,10 @@ type VolumeSpec struct {
 	// ImportFrom is the provider a moved volume's data is copied from; empty
 	// for a volume that starts here.
 	ImportFrom string `json:"importFrom,omitempty"`
+	// ReplicaOf names the primary a replica volume follows, as the on-chain
+	// VolumePolicy.replica_of reference (owner/dseq/gseq/name); empty for a
+	// volume that is no replica.
+	ReplicaOf string `json:"replicaOf,omitempty"`
 }
 
 // VolumeStatus is the storage operator's reconciliation record.
@@ -120,6 +124,19 @@ type VolumeStatus struct {
 	// already holds this provider's own whole copy from its earlier lease.
 	// If no provider since ever held the volume, that copy stands.
 	LocalCopy bool `json:"localCopy,omitempty"`
+	// SyncedAt is when the data a replica holds was taken at its primary:
+	// its lag is the time since. Unset until the replica's first copy lands.
+	SyncedAt *metav1.Time `json:"syncedAt,omitempty"`
+	// Syncing reports that the volume holds no whole copy of its primary:
+	// the replica's first copy has not landed, or a sync round is writing
+	// it. Nothing attaches, adopts or exports the volume meanwhile.
+	Syncing bool `json:"syncing,omitempty"`
+	// Promoted reports a replica that stopped following its primary for
+	// good: compute attached to it, or its data moved here from the
+	// provider that held the replica before, where compute may have. Its
+	// data may hold writes the primary never had, so nothing is copied over
+	// it again.
+	Promoted bool `json:"promoted,omitempty"`
 }
 
 // VolumeName derives the deterministic CRD object name for a volume:
@@ -142,6 +159,24 @@ func (v *Volume) IsBucket() bool {
 // alone does not prove whose it is.
 func (v *Volume) Matches(owner, vid string) bool {
 	return v.Spec.Owner == owner && v.Spec.VID == vid
+}
+
+// IsReplica reports whether the volume is a replica of another volume.
+func (v *Volume) IsReplica() bool {
+	return v.Spec.ReplicaOf != ""
+}
+
+// AwaitsFirstCopy reports a replica still following its primary whose
+// first copy has not landed: the volume holds nothing of the primary yet.
+func (v *Volume) AwaitsFirstCopy() bool {
+	return v.IsReplica() && !v.Status.Promoted && v.Status.SyncedAt == nil
+}
+
+// Incomplete reports a volume whose data is not whole here: a moved volume
+// still being copied in, or a replica whose copy of its primary is missing
+// or being written.
+func (v *Volume) Incomplete() bool {
+	return v.Spec.ImportFrom != "" || v.Status.Syncing || v.AwaitsFirstCopy()
 }
 
 // NewVolume builds the Volume CRD object for a won volume lease from its
@@ -167,6 +202,13 @@ func NewVolume(ns string, lid mtypes.LeaseID, gspec *dtypes.GroupSpec) (*Volume,
 		access = dv1.VolumeAccessBucket.String()
 	}
 
+	// a replica starts with nothing of its primary: it syncs before anything
+	// may attach it
+	var replicaOf string
+	if ref := gspec.Volume.ReplicaOf; ref != nil && !gspec.Volume.IsBucket() {
+		replicaOf = ref.String()
+	}
+
 	return &Volume{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Volume",
@@ -189,9 +231,11 @@ func NewVolume(ns string, lid mtypes.LeaseID, gspec *dtypes.GroupSpec) (*Volume,
 			Retention: gspec.Volume.Retention.String(),
 			LeaseID:   LeaseIDFromAkash(lid),
 			Access:    access,
+			ReplicaOf: replicaOf,
 		},
 		Status: VolumeStatus{
-			Phase: VolumePhasePending,
+			Phase:   VolumePhasePending,
+			Syncing: replicaOf != "",
 		},
 	}, nil
 }

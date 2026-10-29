@@ -34,11 +34,13 @@ import (
 )
 
 // volumeTransfer is the storage-market volume data plane of a provider: the
-// VolumeTransfer server other providers copy volumes out of, and the
-// migrations that copy in the volumes moved here.
+// VolumeTransfer server other providers copy volumes out of, the migrations
+// that copy in the volumes moved here, and the syncs that keep the replicas
+// leased here following their primaries.
 type volumeTransfer struct {
 	server     vtv1.VolumeTransferServer
 	migrations *replication.Migrations
+	replicas   *replication.Replicas
 }
 
 // buildVolumeTransfer assembles the volume data plane (IMPLEMENTATION.md
@@ -163,6 +165,17 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 			Sweep:     files.RemoveStale,
 			SpoolDir:  filepath.Join(baseDir, "spool"),
 			Interval:  viper.GetDuration(FlagVolumeMigrationInterval),
+		}, logger),
+		replicas: replication.NewReplicas(replication.ReplicasConfig{
+			Volumes:   ac,
+			Namespace: ns,
+			Self:      self,
+			Chain:     chain,
+			Source:    volumes,
+			Driver:    driver,
+			Dial:      dial,
+			SpoolDir:  filepath.Join(baseDir, "spool"),
+			Interval:  viper.GetDuration(FlagVolumeReplicaSyncInterval),
 		}, logger),
 	}, nil
 }

@@ -69,7 +69,11 @@ func (s *crdVolumeSource) Resolve(ctx context.Context, owner, vid string) (Volum
 		// Releasing is the only phase past the point of no return; a
 		// Pending volume simply has no PV yet
 		Exportable: vol.Status.PVName != "" && vol.Status.Phase != crd.VolumePhaseReleasing,
-		Incomplete: vol.Spec.ImportFrom != "",
+		Incomplete: vol.Incomplete(),
+	}
+
+	if vol.IsReplica() && !vol.Status.Promoted && vol.Status.SyncedAt != nil {
+		info.SyncedAt = vol.Status.SyncedAt.Time
 	}
 
 	if vol.Status.PVName == "" {
@@ -110,7 +114,7 @@ func (s *crdVolumeSource) resolveBucket(ctx context.Context, vol *crd.Volume, ds
 		DSeq:       dseq,
 		Bucket:     true,
 		Exportable: vol.Status.Bucket != "" && vol.Status.Phase == crd.VolumePhaseExporting && s.buckets != nil,
-		Incomplete: vol.Spec.ImportFrom != "",
+		Incomplete: vol.Incomplete(),
 	}
 
 	if !info.Exportable {

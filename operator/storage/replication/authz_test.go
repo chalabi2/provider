@@ -305,3 +305,65 @@ func TestLatestLeaseIsTheProvidersHighestOrder(t *testing.T) {
 	_, found = latestLease(leases, authzVID, authzDSeq+1, authzExporter)
 	require.False(t, found)
 }
+
+func TestAuthorizeExportServesAReplicaOnlyTheDeploymentItFollows(t *testing.T) {
+	// a replica of an earlier, closed volume of the same vid
+	stale := replicaLease(authzRequester, mv1.LeaseActive)
+	stale.Policy.ReplicaOf.DSeq = authzDSeq - 1
+
+	cs := &fakeChainState{leases: []VolumeLease{
+		migrationLease(authzExporter, mv1.LeaseActive),
+		stale,
+	}}
+
+	err := AuthorizeExport(context.Background(), cs, exportReq(), authzRequester, authzExporter)
+	require.ErrorIs(t, err, ErrNotAuthorized)
+}
+
+func TestAuthorizeExportNeverServesAReplicaToItsPrimary(t *testing.T) {
+	replica := replicaLease(authzExporter, mv1.LeaseActive)
+
+	cs := &fakeChainState{leases: []VolumeLease{
+		migrationLease(authzRequester, mv1.LeaseActive),
+		replica,
+	}}
+
+	// the primary's provider asks the replica's provider for the replica
+	req := &vtv1.ExportRequest{
+		Owner:     authzOwner,
+		Vid:       replica.Policy.Vid,
+		DSeq:      replica.DSeq,
+		Requester: authzRequester,
+	}
+
+	err := AuthorizeExport(context.Background(), cs, req, authzRequester, authzExporter)
+	require.ErrorIs(t, err, ErrNotAuthorized)
+}
+
+func TestReplicaSourceIsThePrimarysActiveLease(t *testing.T) {
+	primary := dv1.VolumeRef{Owner: authzOwner, DSeq: authzDSeq, GSeq: 1, Name: authzVID}
+
+	moved := migrationLease(authzStranger, mv1.LeaseActive)
+	moved.OSeq = 2
+
+	reused := migrationLease("akash1reused", mv1.LeaseActive)
+	reused.DSeq = authzDSeq + 1
+
+	for name, tc := range map[string]struct {
+		leases []VolumeLease
+		source string
+	}{
+		"active":              {[]VolumeLease{migrationLease(authzExporter, mv1.LeaseActive)}, authzExporter},
+		"moved":               {[]VolumeLease{closedLease(authzExporter, 1, mv1.LeaseClosedReasonVolumeMigrate), moved}, authzStranger},
+		"closed":              {[]VolumeLease{closedLease(authzExporter, 1, mv1.LeaseClosedReasonOwner)}, ""},
+		"moving":              {[]VolumeLease{migrationLease(authzExporter, mv1.LeaseReclaiming)}, ""},
+		"vid reused":          {[]VolumeLease{reused}, ""},
+		"only replicas of it": {[]VolumeLease{replicaLease(authzRequester, mv1.LeaseActive)}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source, found := ReplicaSource(tc.leases, primary)
+			require.Equal(t, tc.source != "", found)
+			require.Equal(t, tc.source, source)
+		})
+	}
+}

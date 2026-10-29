@@ -25,6 +25,8 @@ var (
 	ErrVolumeAttached            = fmt.Errorf("%w: volume is attached to another lease", errKubeClient)
 	ErrVolumeShrink              = fmt.Errorf("%w: volume cannot shrink", errKubeClient)
 	ErrVolumeImporting           = fmt.Errorf("%w: volume is still being copied in from its previous provider", errKubeClient)
+	ErrVolumeSyncing             = fmt.Errorf("%w: replica volume is still being copied from its primary", errKubeClient)
+	ErrVolumeCRDOutdated         = fmt.Errorf("%w: the installed Volume CRD drops fields: apply the current CRD", errKubeClient)
 )
 
 // IsKubeAPIUnreachable reports whether err indicates the kube API server is unreachable.

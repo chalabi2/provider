@@ -245,12 +245,20 @@ func (r *reconciler) provision(ctx context.Context, vol *crd.Volume) error {
 	r.log.Info("volume provisioned", "volume", vol.Name, "pv", pv.Name, "class", vol.Spec.Class)
 
 	vol.Status.PVName = pv.Name
-	vol.Status.Phase = crd.VolumePhaseProvisioned
-	if vol.Spec.ImportFrom != "" {
-		vol.Status.Phase = crd.VolumePhaseImporting
-	}
+	vol.Status.Phase = parkedPhase(vol)
 
 	return r.updateStatus(ctx, vol)
+}
+
+// parkedPhase is the phase a volume parks in: Importing while its data is
+// still arriving, from the provider that held it before or, for a replica,
+// as its first copy of the primary; Provisioned, and attachable, otherwise.
+func parkedPhase(vol *crd.Volume) crd.VolumePhase {
+	if vol.Spec.ImportFrom != "" || vol.AwaitsFirstCopy() {
+		return crd.VolumePhaseImporting
+	}
+
+	return crd.VolumePhaseProvisioned
 }
 
 // recordImportSource records where a volume moved here is copied from,
@@ -338,7 +346,7 @@ func (r *reconciler) maybeAdopt(ctx context.Context, vol *crd.Volume) (bool, err
 		}
 	}
 
-	if vol.Spec.ImportFrom != "" {
+	if vol.Incomplete() {
 		// the copy never finished arriving: the PV holds part of the data
 		// at best, which no deployment may take as the volume
 		r.log.Error("adoption rejected: the volume never finished arriving here",
@@ -504,13 +512,9 @@ func (r *reconciler) ensureParked(ctx context.Context, vol *crd.Volume) error {
 	// retained volumes stay Retained (the GC clock is running), a volume
 	// whose data is still arriving parks as Importing, and everything else
 	// as Provisioned
-	phase := crd.VolumePhaseProvisioned
-
-	switch {
-	case vol.Status.Phase == crd.VolumePhaseRetained:
+	phase := parkedPhase(vol)
+	if vol.Status.Phase == crd.VolumePhaseRetained {
 		phase = crd.VolumePhaseRetained
-	case vol.Spec.ImportFrom != "":
-		phase = crd.VolumePhaseImporting
 	}
 
 	if vol.Status.Phase != phase {

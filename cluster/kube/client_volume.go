@@ -10,6 +10,7 @@ import (
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 
 	mapi "pkg.akt.dev/go/manifest/v2beta3"
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
@@ -133,20 +134,37 @@ func (c *client) DeployVolume(ctx context.Context, lid mtypes.LeaseID, group *dv
 			uobj.Spec.ImportFrom = obj.Spec.ImportFrom
 		}
 
-		_, err = wrapKubeCall("akash-volumes-update", func() (*crd.Volume, error) {
+		stored, err := wrapKubeCall("akash-volumes-update", func() (*crd.Volume, error) {
 			return c.ac.AkashV2beta2().Volumes(c.ns).Update(ctx, uobj, metav1.UpdateOptions{})
 		})
+		if err != nil {
+			return err
+		}
 
-		return err
+		return keptReplicaOf(stored, vol.Spec.ReplicaOf)
 	case kerrors.IsNotFound(err):
-		_, err = wrapKubeCall("akash-volumes-create", func() (*crd.Volume, error) {
+		stored, err := wrapKubeCall("akash-volumes-create", func() (*crd.Volume, error) {
 			return c.ac.AkashV2beta2().Volumes(c.ns).Create(ctx, vol, metav1.CreateOptions{})
 		})
+		if err != nil {
+			return err
+		}
 
-		return err
+		return keptReplicaOf(stored, vol.Spec.ReplicaOf)
 	default:
 		return err
 	}
+}
+
+// keptReplicaOf refuses a record the API server stripped of the primary a
+// replica follows, as a Volume CRD installed before replicas existed does:
+// the replica would come up as an empty volume anything may attach.
+func keptReplicaOf(stored *crd.Volume, replicaOf string) error {
+	if stored.Spec.ReplicaOf != replicaOf {
+		return fmt.Errorf("%w: volume %s is a replica of %s, but the record lost spec.replicaOf", kubeclienterrors.ErrVolumeCRDOutdated, stored.Name, replicaOf)
+	}
+
+	return nil
 }
 
 // relisted reports whether next is a later order of the same volume group
@@ -175,7 +193,17 @@ func (c *client) getVolume(ctx context.Context, ref dtypes.VolumeRef) (*crd.Volu
 	return obj, nil
 }
 
+// AttachVolume records the volume attached to the compute lease. The record
+// is read and written on its resource version, retried on a conflict, so it
+// never attaches over a replica sync round that began in between: the round
+// marks the record first, and the retry sees it.
 func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return c.attachVolume(ctx, lid, ref)
+	})
+}
+
+func (c *client) attachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtypes.VolumeRef) error {
 	obj, err := c.getVolume(ctx, ref)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
@@ -191,13 +219,29 @@ func (c *client) AttachVolume(ctx context.Context, lid mtypes.LeaseID, ref dtype
 	}
 
 	// a moved volume's data is still being copied in
-	if obj.Spec.ImportFrom != "" || obj.Status.Phase == crd.VolumePhaseImporting {
+	if obj.Spec.ImportFrom != "" {
+		return fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeImporting, ref)
+	}
+
+	// a replica's copy of its primary has not landed, or a sync round is
+	// writing it
+	if obj.Status.Syncing || obj.AwaitsFirstCopy() {
+		return fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeSyncing, ref)
+	}
+
+	if obj.Status.Phase == crd.VolumePhaseImporting {
 		return fmt.Errorf("%w: %s", kubeclienterrors.ErrVolumeImporting, ref)
 	}
 
 	uobj := obj.DeepCopy()
 	uobj.Status.AttachedLease = lid.String()
 	uobj.Status.Phase = crd.VolumePhaseAttached
+
+	// compute attached to a replica promotes it: from here on its data is
+	// the tenant's, and nothing is copied over it from the primary again
+	if uobj.IsReplica() {
+		uobj.Status.Promoted = true
+	}
 
 	_, err = wrapKubeCall("akash-volumes-update", func() (*crd.Volume, error) {
 		return c.ac.AkashV2beta2().Volumes(c.ns).Update(ctx, uobj, metav1.UpdateOptions{})

@@ -274,6 +274,9 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 
 	logger.Info("volume migration started", "sources", sources, "local_copy", vol.Status.LocalCopy, "bucket", vol.IsBucket())
 
+	// whether a source's whole copy landed, rather than the one here standing
+	landed := false
+
 	return RunMigration(ctx, MigrationDeps{
 		Sources: sources,
 		Sync: func(ctx context.Context, source string) (bool, error) {
@@ -282,15 +285,20 @@ func (m *Migrations) migrate(ctx context.Context, vol *crd.Volume) error {
 				return false, err
 			}
 
-			return r(ctx, source)
+			final, err := r(ctx, source)
+			landed = final && err == nil
+
+			return final, err
 		},
 		Park: func(ctx context.Context) error {
-			return m.park(ctx, vol.Name, lid)
+			return m.park(ctx, vol.Name, lid, landed)
 		},
 		Evict: func(ctx context.Context) error {
 			return m.cfg.Evict(ctx, lid)
 		},
-		KeepLocal:   vol.Status.LocalCopy,
+		// a replica none of whose providers held a whole copy never had
+		// one: it starts afresh from its primary
+		KeepLocal:   vol.Status.LocalCopy || vol.IsReplica(),
 		Interval:    m.cfg.Interval,
 		MaxFailures: m.cfg.MaxFailures,
 	}, logger)
@@ -374,8 +382,10 @@ func (m *Migrations) bucketCopier(vol *crd.Volume, dseq, maxBytes uint64, logger
 }
 
 // park records the copy as whole: the volume is Provisioned, and nothing
-// marks it as still arriving.
-func (m *Migrations) park(ctx context.Context, name string, lid mv1.LeaseID) error {
+// marks it as still arriving. A replica whose copy landed from the provider
+// that held it before stops following its primary: compute may have
+// attached it there, and its writes would be overwritten.
+func (m *Migrations) park(ctx context.Context, name string, lid mv1.LeaseID, landed bool) error {
 	vols := m.cfg.Volumes.AkashV2beta2().Volumes(m.cfg.Namespace)
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -393,6 +403,16 @@ func (m *Migrations) park(ctx context.Context, name string, lid mv1.LeaseID) err
 		uvol.Spec.ImportFrom = ""
 		uvol.Status.LocalCopy = false
 		uvol.Status.Phase = crd.VolumePhaseProvisioned
+
+		if landed && uvol.IsReplica() {
+			uvol.Status.Promoted = true
+			uvol.Status.Syncing = false
+		}
+
+		// a replica starting afresh waits for its first copy of the primary
+		if uvol.AwaitsFirstCopy() {
+			uvol.Status.Phase = crd.VolumePhaseImporting
+		}
 
 		_, err = vols.Update(ctx, uvol, metav1.UpdateOptions{})
 

@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -267,4 +268,53 @@ func TestSourceReportsABucketThatNeverFinishedArriving(t *testing.T) {
 	info, err := src.Resolve(context.Background(), authzOwner, authzVID)
 	require.NoError(t, err)
 	require.True(t, info.Incomplete)
+}
+
+func TestSourceMarksAReplicaWithoutAWholeCopy(t *testing.T) {
+	synced := metav1.Now()
+
+	for name, tc := range map[string]struct {
+		syncedAt   *metav1.Time
+		syncing    bool
+		promoted   bool
+		incomplete bool
+	}{
+		"no copy yet":            {nil, true, false, true},
+		"round writing it":       {&synced, true, false, true},
+		"synced":                 {&synced, false, false, false},
+		"promoted":               {&synced, false, true, false},
+		"moved here, promoted":   {nil, false, true, false},
+		"promoted, round unsure": {&synced, true, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vol := sourceVolume(crd.VolumePhaseProvisioned, "")
+			vol.Spec.ReplicaOf = "primary"
+			vol.Status.SyncedAt = tc.syncedAt
+			vol.Status.Syncing = tc.syncing
+			vol.Status.Promoted = tc.promoted
+
+			info, err := sourceWorld(t, vol, sourcePVBoundTo(sourceVolNS)).Resolve(context.Background(), authzOwner, authzVID)
+			require.NoError(t, err)
+			require.Equal(t, tc.incomplete, info.Incomplete)
+		})
+	}
+}
+
+func TestSourceDatesAReplicasData(t *testing.T) {
+	synced := metav1.NewTime(metav1.Now().Add(-time.Hour))
+
+	vol := sourceVolume(crd.VolumePhaseProvisioned, "")
+	vol.Spec.ReplicaOf = "primary"
+	vol.Status.SyncedAt = &synced
+
+	info, err := sourceWorld(t, vol, sourcePVBoundTo(sourceVolNS)).Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.True(t, synced.Time.Equal(info.SyncedAt))
+
+	// promoted, its data is the tenant's own, as current as any volume's
+	vol.Status.Promoted = true
+
+	info, err = sourceWorld(t, vol, sourcePVBoundTo(sourceVolNS)).Resolve(context.Background(), authzOwner, authzVID)
+	require.NoError(t, err)
+	require.True(t, info.SyncedAt.IsZero())
 }

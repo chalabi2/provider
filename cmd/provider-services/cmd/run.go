@@ -905,6 +905,14 @@ func doRunCmd(ctx context.Context, cmd *cobra.Command, _ []string) error {
 
 			return nil
 		})
+
+		group.Go(func() error {
+			if err := transfer.replicas.Run(ctx); !errors.Is(err, context.Canceled) {
+				return err
+			}
+
+			return nil
+		})
 	}
 
 	err = gwgrpc.NewServer(ctx, grpcaddr, accQuerier, service, gwgrpcOpts...)

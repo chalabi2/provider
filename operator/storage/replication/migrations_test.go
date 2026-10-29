@@ -12,6 +12,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	"pkg.akt.dev/go/testutil"
 	vtv1 "pkg.akt.dev/go/volume/v1"
@@ -358,11 +359,11 @@ func TestParkRefusesAVolumeThatMovedOn(t *testing.T) {
 	require.NoError(t, err)
 
 	w.setPhase(t, crd.VolumePhaseExporting)
-	require.ErrorIs(t, w.m.park(context.Background(), crd.VolumeName(authzOwner, authzVID), lid), ErrNotImporting)
+	require.ErrorIs(t, w.m.park(context.Background(), crd.VolumeName(authzOwner, authzVID), lid, true), ErrNotImporting)
 
 	w.setPhase(t, crd.VolumePhaseImporting)
 	lid.OSeq = 3
-	require.ErrorIs(t, w.m.park(context.Background(), crd.VolumeName(authzOwner, authzVID), lid), ErrNotImporting)
+	require.ErrorIs(t, w.m.park(context.Background(), crd.VolumeName(authzOwner, authzVID), lid, true), ErrNotImporting)
 }
 
 func TestTransferBoundLeavesRoomForArchiveOverhead(t *testing.T) {
@@ -372,4 +373,55 @@ func TestTransferBoundLeavesRoomForArchiveOverhead(t *testing.T) {
 
 	_, err = transferBound("lots")
 	require.ErrorIs(t, err, ErrReplication)
+}
+
+// replicaMoving is a replica volume won on its re-listed order: its record,
+// as DeployVolume makes it, copies in from the provider that held it.
+func replicaMoving(w *migrationsWorld, t *testing.T) {
+	t.Helper()
+
+	vol := w.volume(t)
+	vol.Spec.ReplicaOf = dv1.VolumeRef{Owner: authzOwner, DSeq: authzDSeq + 1, GSeq: 1, Name: "primary-data"}.String()
+	vol.Status.Syncing = true
+
+	_, err := w.vols.AkashV2beta2().Volumes(migrationsNS).Update(context.Background(), vol, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+// TestMigrationsStopAReplicaThatMovedWithItsData: compute may have attached
+// the replica at the provider it moved from, so the copy that landed is not
+// overwritten from its primary again.
+func TestMigrationsStopAReplicaThatMovedWithItsData(t *testing.T) {
+	w := newMigrationsWorld(t, crd.VolumePhaseImporting)
+	replicaMoving(w, t)
+	w.source.goFinal()
+
+	require.NoError(t, w.m.reconcile(w.ctx))
+	require.Eventually(t, func() bool { return w.volume(t).Status.Phase == crd.VolumePhaseProvisioned }, 5*time.Second, time.Millisecond)
+
+	parked := w.volume(t)
+	require.True(t, parked.Status.Promoted)
+	require.False(t, parked.Status.Syncing)
+	require.False(t, parked.Incomplete())
+	require.Equal(t, map[string]string{"app.db": "rows the tenant wrote"}, readTree(t, w.dst, w.dstRef))
+}
+
+// TestMigrationsStartAReplicaAfreshWhenNoProviderHeldIt: a replica none of
+// whose providers finished its copy never had one, so it waits for its
+// first copy of the primary rather than being evicted again and again.
+func TestMigrationsStartAReplicaAfreshWhenNoProviderHeldIt(t *testing.T) {
+	w := newMigrationsWorld(t, crd.VolumePhaseImporting)
+	replicaMoving(w, t)
+	w.source.vols.update(func(info *VolumeInfo) { info.Incomplete = true })
+
+	require.NoError(t, w.m.reconcile(w.ctx))
+	w.m.wg.Wait()
+
+	parked := w.volume(t)
+	require.Equal(t, crd.VolumePhaseImporting, parked.Status.Phase)
+	require.Empty(t, parked.Spec.ImportFrom)
+	require.True(t, parked.Status.Syncing)
+	require.False(t, parked.Status.Promoted)
+	require.True(t, replicaFollows(parked), "the replica's sync takes it from here")
+	require.Empty(t, w.evictions())
 }

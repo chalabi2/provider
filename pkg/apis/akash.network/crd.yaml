@@ -687,6 +687,8 @@ spec:
                   enum: ["", "bucket"]
                 importFrom:
                   type: string
+                replicaOf:
+                  type: string
             status:
               type: object
               properties:
@@ -707,4 +709,11 @@ spec:
                 bucketSize:
                   type: string
                 localCopy:
+                  type: boolean
+                syncedAt:
+                  type: string
+                  format: date-time
+                syncing:
+                  type: boolean
+                promoted:
                   type: boolean

@@ -157,11 +157,13 @@ func RunMigration(ctx context.Context, deps MigrationDeps, logger log.Logger) er
 }
 
 // ReplicaDeps drive the replica_of steady-state sync (DESIGN.md §9.4):
-// the replica's operator pulls periodic diffs from the primary for as
+// the replica's provider pulls periodic diffs from the primary for as
 // long as the replica lease lives. Paid work on both sides - the period
 // comes from provider config.
 type ReplicaDeps struct {
-	// Sync performs one sync round against the primary.
+	// Sync performs one sync round against the primary, returning the
+	// snapshot applied, or ErrReplicaDone once the replica follows its
+	// primary no more.
 	Sync func(ctx context.Context) (string, error)
 
 	// Interval is the sync period (provider config).
@@ -170,10 +172,15 @@ type ReplicaDeps struct {
 
 const defaultReplicaInterval = 15 * time.Minute
 
+// ErrReplicaDone ends a replica's sync for good: compute attached to it, so
+// its data is the tenant's and nothing is copied over it again.
+var ErrReplicaDone = errors.New("volume replication: replica promoted")
+
 // RunReplica pulls the initial full export then periodic diffs until the
-// context ends (the replica lease closing tears the context down). Sync
-// failures are logged and retried on the next tick - replica lag is
-// observable via VolumeTransfer.Status, never chain-attested.
+// context ends (the replica lease closing tears the context down) or a
+// round reports ErrReplicaDone. Other sync failures are logged and retried
+// on the next tick - replica lag is observable via VolumeTransfer.Status,
+// never chain-attested.
 func RunReplica(ctx context.Context, deps ReplicaDeps, logger log.Logger) error {
 	interval := deps.Interval
 	if interval <= 0 {
@@ -181,9 +188,17 @@ func RunReplica(ctx context.Context, deps ReplicaDeps, logger log.Logger) error 
 	}
 
 	for {
-		if applied, err := deps.Sync(ctx); err != nil {
+		applied, err := deps.Sync(ctx)
+
+		switch {
+		case errors.Is(err, ErrReplicaDone):
+			logger.Info("replica promoted; it no longer follows its primary")
+			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case err != nil:
 			logger.Error("replica sync", "err", err)
-		} else if applied != "" {
+		case applied != "":
 			logger.Info("replica synced", "snapshot", applied)
 		}
 

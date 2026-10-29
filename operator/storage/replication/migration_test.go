@@ -308,3 +308,22 @@ func TestReplicaLoopSurvivesSyncErrors(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.GreaterOrEqual(t, syncs, 3)
 }
+
+func TestReplicaLoopEndsOncePromoted(t *testing.T) {
+	syncs := 0
+
+	deps := ReplicaDeps{
+		Sync: func(_ context.Context) (string, error) {
+			syncs++
+			if syncs == 2 {
+				return "", fmt.Errorf("round: %w", ErrReplicaDone)
+			}
+
+			return "", nil
+		},
+		Interval: time.Millisecond,
+	}
+
+	require.NoError(t, RunReplica(context.Background(), deps, testutil.Logger(t)))
+	require.Equal(t, 2, syncs)
+}

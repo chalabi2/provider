@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -128,7 +129,7 @@ type transferWorld struct {
 	chain  *fakeChainState
 }
 
-func transferScaffold(t *testing.T) *transferWorld {
+func transferScaffold(t *testing.T, opts ...ServerOpt) *transferWorld {
 	t.Helper()
 
 	w := &transferWorld{
@@ -147,8 +148,10 @@ func transferScaffold(t *testing.T) *transferWorld {
 		w.vols,
 		authzExporter,
 		testutil.Logger(t),
-		WithPeerID(func(context.Context) (string, error) { return authzRequester, nil }),
-		WithChunkSize(7), // tiny chunks exercise the framing
+		append([]ServerOpt{
+			WithPeerID(func(context.Context) (string, error) { return authzRequester, nil }),
+			WithChunkSize(7), // tiny chunks exercise the framing
+		}, opts...)...,
 	)
 	w.client = &inprocClient{srv: srv}
 
@@ -431,4 +434,131 @@ func TestIsImportIncompleteIgnoresOtherErrors(t *testing.T) {
 	require.False(t, IsImportIncomplete(errors.New("plain")))
 	require.False(t, IsImportIncomplete(status.Error(codes.FailedPrecondition, "not exportable")))
 	require.False(t, IsImportIncomplete(nil))
+}
+
+// replicaWorld is a primary's provider serving a replica's provider: the
+// requester holds a replica lease naming the exporter's volume, and the
+// server runs on a clock the test moves.
+type replicaWorld struct {
+	*transferWorld
+	mu    sync.Mutex
+	clock time.Time
+}
+
+func replicaScaffold(t *testing.T, maxReplicas uint32) *replicaWorld {
+	t.Helper()
+
+	w := &replicaWorld{clock: time.Now()}
+	w.transferWorld = transferScaffold(t, withClock(w.now))
+
+	primary := migrationLease(authzExporter, mv1.LeaseActive)
+	primary.OSeq = 1
+	primary.Policy.MaxReplicas = maxReplicas
+
+	replica := replicaLease(authzRequester, mv1.LeaseActive)
+	replica.OSeq = 1
+
+	w.chain.leases = []VolumeLease{primary, replica}
+
+	return w
+}
+
+func (w *replicaWorld) now() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.clock
+}
+
+func (w *replicaWorld) advance(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.clock = w.clock.Add(d)
+}
+
+func TestTransferHandsAReplicaAFreshSnapshot(t *testing.T) {
+	ctx := context.Background()
+
+	w := replicaScaffold(t, 1)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+
+	first, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows written since"})
+
+	soon, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.Equal(t, first.LatestSnapshot, soon.LatestSnapshot, "a replica asking again within the minute gets the same snapshot")
+
+	w.advance(2 * time.Minute)
+
+	later, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.NotEqual(t, first.LatestSnapshot, later.LatestSnapshot)
+	require.False(t, later.Final)
+
+	digest, err := w.src.Digest(ctx, w.ref, later.LatestSnapshot)
+	require.NoError(t, err)
+	require.Equal(t, digest.SHA256, later.SHA256)
+
+	dst := NewFileDriver(t.TempDir())
+	dstRef := Ref{Name: "volume-ffffffffffff", Path: t.TempDir()}
+
+	_, err = w.syncer(t, dst, dstRef).SyncOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"app.db": "rows written since"}, readTree(t, dst, dstRef))
+}
+
+func TestTransferKeepsASnapshotForEachReplicasDiffBase(t *testing.T) {
+	ctx := context.Background()
+
+	w := replicaScaffold(t, 2)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+
+	var latest string
+
+	for range 6 {
+		st, err := w.client.Status(ctx, statusReq())
+		require.NoError(t, err)
+
+		latest = st.LatestSnapshot
+
+		w.advance(2 * time.Minute)
+	}
+
+	snaps, err := w.src.Snapshots(ctx, w.ref)
+	require.NoError(t, err)
+	require.Len(t, snaps, replicaSnapshotsKept(2))
+	require.Equal(t, latest, snaps[len(snaps)-1].ID)
+}
+
+func TestTransferHandsAMovingVolumesDestinationNoFreshSnapshot(t *testing.T) {
+	ctx := context.Background()
+
+	clock := time.Now()
+	w := transferScaffold(t, withClock(func() time.Time { return clock }))
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+
+	first, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+
+	clock = clock.Add(time.Hour)
+
+	later, err := w.client.Status(ctx, statusReq())
+	require.NoError(t, err)
+	require.Equal(t, first.LatestSnapshot, later.LatestSnapshot, "only its final snapshot follows the first")
+}
+
+func TestTransferReportsHowFarBehindAReplicaIs(t *testing.T) {
+	w := replicaScaffold(t, 1)
+	writeTree(t, w.src, w.ref, map[string]string{"app.db": "rows"})
+
+	// the exporter is itself a replica, an hour behind its own primary
+	w.vols.update(func(info *VolumeInfo) { info.SyncedAt = w.now().Add(-time.Hour) })
+
+	st, err := w.client.Status(context.Background(), statusReq())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, st.SyncLagSeconds, int64(3600))
 }

@@ -48,6 +48,10 @@ type VolumeState struct {
 	Bucket        string `json:"bucket,omitempty"`
 	DSeq          string `json:"dseq,omitempty"`
 	ImportFrom    string `json:"import-from,omitempty"`
+	ReplicaOf     string `json:"replica-of,omitempty"`
+	SyncedAt      string `json:"synced-at,omitempty"`
+	Syncing       bool   `json:"syncing,omitempty"`
+	Promoted      bool   `json:"promoted,omitempty"`
 }
 
 type storageOperator struct {
@@ -663,6 +667,12 @@ func (op *storageOperator) applyAttachment(ctx context.Context, ref dv1.VolumeRe
 	uvol := vol.DeepCopy()
 	uvol.Status.AttachedLease = lease
 
+	// compute attached to a replica promotes it. A sync round still writing
+	// it lands first: nothing mounts the volume until it has (AttachVolume)
+	if uvol.IsReplica() {
+		uvol.Status.Promoted = true
+	}
+
 	_, err = op.ac.AkashV2beta2().Volumes(op.ns).Update(ctx, uvol, metav1.UpdateOptions{})
 
 	return err
@@ -783,10 +793,17 @@ func volumeState(vol *crd.Volume) VolumeState {
 		Bucket:        vol.Status.Bucket,
 		DSeq:          vol.Spec.GroupID.DSeq,
 		ImportFrom:    vol.Spec.ImportFrom,
+		ReplicaOf:     vol.Spec.ReplicaOf,
+		Syncing:       vol.Status.Syncing || vol.AwaitsFirstCopy(),
+		Promoted:      vol.Status.Promoted,
 	}
 
 	if vol.Status.RetainedUntil != nil {
 		state.RetainedUntil = vol.Status.RetainedUntil.UTC().Format(time.RFC3339)
+	}
+
+	if vol.Status.SyncedAt != nil {
+		state.SyncedAt = vol.Status.SyncedAt.UTC().Format(time.RFC3339)
 	}
 
 	return state

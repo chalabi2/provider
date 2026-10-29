@@ -65,20 +65,28 @@ func AuthorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest
 	return err
 }
 
-// authorizeExport runs the exporter-side gate and returns the chain's leases
-// on the volume it decided from.
-func authorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest, peer, self string) ([]VolumeLease, error) {
+// exportGrant is what the exporter-side gate decided from: the chain's
+// leases on the volume, and whether the requester is a replica of it.
+type exportGrant struct {
+	leases  []VolumeLease
+	replica bool
+}
+
+// authorizeExport runs the exporter-side gate. A replica is served only by
+// the deployment its replica_of names, so a replica of a closed volume never
+// reads a later volume that reuses the vid.
+func authorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest, peer, self string) (exportGrant, error) {
 	if req.Requester == "" || peer != req.Requester {
-		return nil, fmt.Errorf("%w: requester %q does not match peer identity %q", ErrNotAuthorized, req.Requester, peer)
+		return exportGrant{}, fmt.Errorf("%w: requester %q does not match peer identity %q", ErrNotAuthorized, req.Requester, peer)
 	}
 
 	if req.Requester == self {
-		return nil, fmt.Errorf("%w: requester is the exporter itself", ErrNotAuthorized)
+		return exportGrant{}, fmt.Errorf("%w: requester is the exporter itself", ErrNotAuthorized)
 	}
 
 	leases, err := cs.VolumeLeases(ctx, req.Owner, req.Vid)
 	if err != nil {
-		return nil, err
+		return exportGrant{}, err
 	}
 
 	for _, lease := range leases {
@@ -92,16 +100,16 @@ func authorizeExport(ctx context.Context, cs ChainState, req *vtv1.ExportRequest
 
 		// migration: the re-ordered lease lives on the same deployment
 		if lease.Policy.Vid == req.Vid && lease.DSeq == req.DSeq {
-			return leases, nil
+			return exportGrant{leases: leases}, nil
 		}
 
 		// replication: the requester's volume names this one as its target
-		if ref := lease.Policy.ReplicaOf; ref != nil && ref.Owner == req.Owner && ref.Name == req.Vid {
-			return leases, nil
+		if ref := lease.Policy.ReplicaOf; ref != nil && ref.Owner == req.Owner && ref.Name == req.Vid && ref.DSeq == req.DSeq {
+			return exportGrant{leases: leases, replica: true}, nil
 		}
 	}
 
-	return nil, fmt.Errorf("%w: no chain record entitles %q to volume %s/%s", ErrNotAuthorized, req.Requester, req.Owner, req.Vid)
+	return exportGrant{}, fmt.Errorf("%w: no chain record entitles %q to volume %s/%s", ErrNotAuthorized, req.Requester, req.Owner, req.Vid)
 }
 
 // AuthorizeImport is the importer-side gate: before applying any byte the
@@ -184,6 +192,21 @@ func MigrationSources(leases []VolumeLease, vid string, dseq uint64, self string
 	}
 
 	return sources
+}
+
+// ReplicaSource names the provider a replica copies from: the provider of
+// the active lease on the very deployment its replica_of names, among the
+// leases the chain holds on the primary's vid. False while the primary has
+// no active lease: it closed, or it is between providers while it moves. A
+// reference names its volume by the vid, as attach references do.
+func ReplicaSource(leases []VolumeLease, primary dv1.VolumeRef) (string, bool) {
+	for _, lease := range leases {
+		if lease.DSeq == primary.DSeq && lease.Policy.Vid == primary.Name && lease.State == mv1.LeaseActive {
+			return lease.Provider, true
+		}
+	}
+
+	return "", false
 }
 
 // latestLease returns provider's latest lease on volume vid of deployment

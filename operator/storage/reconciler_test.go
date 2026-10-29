@@ -1017,3 +1017,63 @@ func TestReconcileVolumeWonBackWaitsForACRDThatKeepsItsSource(t *testing.T) {
 
 	require.Equal(t, crd.VolumePhasePending, getVolume(t, s, vol.Name).Status.Phase)
 }
+
+// testReplica is a replica's record, as DeployVolume creates it.
+func testReplica(t *testing.T, lid mtypes.LeaseID, phase crd.VolumePhase) *crd.Volume {
+	t.Helper()
+
+	vol := testVolume(t, lid, phase)
+	vol.Spec.ReplicaOf = dv1.VolumeRef{Owner: lid.Owner, DSeq: lid.DSeq + 1, GSeq: 1, Name: "primary-data"}.String()
+	vol.Status.Syncing = true
+
+	return vol
+}
+
+func TestReconcileReplicaParksAsImportingUntilItsFirstCopy(t *testing.T) {
+	lid := firstOrderLease(t)
+	vol := testReplica(t, lid, crd.VolumePhasePending)
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	s := makeScaffold(t, nil, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	stored := getVolume(t, s, vol.Name)
+	require.Equal(t, crd.VolumePhaseImporting, stored.Status.Phase, "an empty replica is nothing to attach")
+	require.Equal(t, testPV, stored.Status.PVName)
+
+	// reparked, it still waits for its first copy
+	require.NoError(t, s.r.reconcile(context.Background(), stored))
+	require.Equal(t, crd.VolumePhaseImporting, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+func TestReconcileSyncedReplicaStaysProvisionedThroughARound(t *testing.T) {
+	lid := firstOrderLease(t)
+	vol := testReplica(t, lid, crd.VolumePhaseProvisioned)
+	synced := metav1.NewTime(time.Now().Add(-time.Minute))
+	vol.Status.SyncedAt = &synced
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	s := makeScaffold(t, nil, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	// a round is writing it: the record says so, and the phase holds
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+	require.Equal(t, crd.VolumePhaseProvisioned, getVolume(t, s, vol.Name).Status.Phase)
+}
+
+func TestReconcileAdoptRejectedForAReplicaWithoutAWholeCopy(t *testing.T) {
+	lid := relistedLease(t)
+	vol := testVolume(t, lid, crd.VolumePhaseRetained)
+	// adopted: the record no longer names a primary, but the round that was
+	// writing it never landed
+	vol.Status.Syncing = true
+	vol.Status.PVName = testPV
+	pv := testPVObj(vol, testVolNS, vol.Name)
+	pv.Labels[LabelVolumeDSeq] = "1"
+	chain := &fakeChain{policy: &dv1.VolumePolicy{Vid: testVID, Adopt: &dv1.VolumeRef{Owner: vol.Spec.Owner, DSeq: 1, Name: testVID}}}
+	s := makeScaffold(t, chain, []runtime.Object{holderPVC(vol, testPV), pv}, []runtime.Object{vol})
+
+	require.NoError(t, s.r.reconcile(context.Background(), vol))
+
+	require.Equal(t, crd.VolumePhaseRetained, getVolume(t, s, vol.Name).Status.Phase)
+	require.Zero(t, chain.calls, "a half-written volume is refused before the chain is asked")
+}

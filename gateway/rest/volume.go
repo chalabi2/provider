@@ -25,6 +25,17 @@ type VolumeStatus struct {
 	AttachedLease string `json:"attached_lease,omitempty"`
 	// RetainedUntil is when a volume whose lease closed is destroyed.
 	RetainedUntil *time.Time `json:"retained_until,omitempty"`
+	// ReplicaOf names the primary a replica follows (owner/dseq/gseq/name).
+	ReplicaOf string `json:"replica_of,omitempty"`
+	// SyncedAt is when the data a replica holds was taken at its primary;
+	// absent until its first copy lands.
+	SyncedAt *time.Time `json:"synced_at,omitempty"`
+	// SyncLagSeconds is how far a replica still following its primary is
+	// behind it: the time since SyncedAt.
+	SyncLagSeconds *int64 `json:"sync_lag_seconds,omitempty"`
+	// Promoted reports a replica that compute attached, so it no longer
+	// follows its primary.
+	Promoted bool `json:"promoted,omitempty"`
 }
 
 // volumeStatusHandler serves a volume lease's owner where its volume
@@ -65,6 +76,21 @@ func volumeStatusHandler(log log.Logger, volumes leaseVolumes) http.HandlerFunc 
 		if vol.Status.RetainedUntil != nil {
 			until := vol.Status.RetainedUntil.UTC()
 			status.RetainedUntil = &until
+		}
+
+		if vol.IsReplica() {
+			status.ReplicaOf = vol.Spec.ReplicaOf
+			status.Promoted = vol.Status.Promoted
+
+			if vol.Status.SyncedAt != nil {
+				synced := vol.Status.SyncedAt.UTC()
+				status.SyncedAt = &synced
+
+				if !vol.Status.Promoted {
+					lag := int64(time.Since(synced).Seconds())
+					status.SyncLagSeconds = &lag
+				}
+			}
 		}
 
 		writeJSONStatus(w, http.StatusOK, status)

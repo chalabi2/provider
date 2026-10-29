@@ -93,8 +93,9 @@ func (sopc *client) RetainedVolume(ctx context.Context, owner string, vid string
 		return false, err
 	}
 
-	// a copy that never finished arriving is no volume to adopt
-	if state.ImportFrom != "" {
+	// a copy that never finished arriving is no volume to adopt, nor is a
+	// replica whose copy of its primary is missing or half written
+	if state.ImportFrom != "" || state.Syncing {
 		return false, nil
 	}
 

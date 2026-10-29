@@ -32,8 +32,10 @@ type VolumeInfo struct {
 	// exports (anything with a provisioned PV that is not being
 	// destroyed).
 	Exportable bool
-	// Incomplete reports a volume moved here whose copy never finished
-	// arriving: it holds nothing anyone may take.
+	// Incomplete reports a volume whose data is not whole here: a volume
+	// moved here whose copy never finished arriving, or a replica whose
+	// copy of its primary is missing or being written. It holds nothing
+	// anyone may take.
 	Incomplete bool
 	// Quiesced reports that no workload has the volume mounted, so nothing
 	// can write to it. For a bucket: that no key can.
@@ -41,6 +43,9 @@ type VolumeInfo struct {
 	// Bucket reports an S3 bucket, whose objects move with ExportObjects
 	// rather than as an image.
 	Bucket bool
+	// SyncedAt is, for a replica still following its primary, when the data
+	// it holds was taken there; zero for any other volume.
+	SyncedAt time.Time
 }
 
 // ReasonImportIncomplete is the ErrorInfo reason of a refusal from a
@@ -128,12 +133,23 @@ type Server struct {
 	// buckets serves the objects of moving buckets; nil serves none
 	buckets bucket.Backend
 
+	// replicaEvery spaces the snapshots taken for replicas: one asking
+	// sooner gets the last one
+	replicaEvery time.Duration
+
 	// final holds the snapshot taken once a volume went final, keyed by the
 	// volume and the lease whose close made it final; every later export of
 	// that close serves it
 	mu    sync.Mutex
 	final map[string]string
+	// replicaTaken records when a snapshot was last taken for a volume's
+	// replicas, for a driver that cannot date its snapshots
+	replicaTaken map[string]time.Time
 }
+
+// defaultReplicaEvery is the least time between two snapshots taken for a
+// volume's replicas, whatever pace they sync at.
+const defaultReplicaEvery = time.Minute
 
 var _ vtv1.VolumeTransferServer = (*Server)(nil)
 
@@ -155,19 +171,26 @@ func WithBuckets(buckets bucket.Backend) ServerOpt {
 	return func(s *Server) { s.buckets = buckets }
 }
 
+// withClock overrides the server's clock (tests).
+func withClock(now func() time.Time) ServerOpt {
+	return func(s *Server) { s.now = now }
+}
+
 // NewServer builds the VolumeTransfer server. self is this provider's
 // address - the exporter identity that never authorizes itself.
 func NewServer(driver Driver, chain ChainState, vols VolumeSource, self string, logger log.Logger, opts ...ServerOpt) *Server {
 	s := &Server{
-		driver:    driver,
-		chain:     chain,
-		vols:      vols,
-		self:      self,
-		peerID:    peerFromMTLS,
-		chunkSize: DefaultChunkSize,
-		now:       time.Now,
-		log:       logger.With("module", "volume-transfer"),
-		final:     make(map[string]string),
+		driver:       driver,
+		chain:        chain,
+		vols:         vols,
+		self:         self,
+		peerID:       peerFromMTLS,
+		chunkSize:    DefaultChunkSize,
+		now:          time.Now,
+		log:          logger.With("module", "volume-transfer"),
+		replicaEvery: defaultReplicaEvery,
+		final:        make(map[string]string),
+		replicaTaken: make(map[string]time.Time),
 	}
 
 	for _, opt := range opts {
@@ -207,50 +230,66 @@ func peerAddress(cert *x509.Certificate) (string, error) {
 	return cert.Subject.CommonName, nil
 }
 
-// authorize runs the exporter-side gate shared by Export and Status. When
-// the volume is final (this provider's lease on it has closed and no
-// workload has it mounted, so it cannot change again) it also returns the
-// key its final snapshot is kept under; empty otherwise.
-func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, requester string) (VolumeInfo, string, error) {
+// exportAuth is what an authorized export or status request may read.
+type exportAuth struct {
+	info VolumeInfo
+	// finalKey is, once the volume is final (this provider's lease on it
+	// has closed and no workload has it mounted, so it cannot change
+	// again), the key its final snapshot is kept under; empty otherwise
+	finalKey string
+	// replica reports a requester syncing a replica of the volume
+	replica bool
+	// maxReplicas is how many replicas the volume's lease here serves
+	maxReplicas uint32
+}
+
+// authorize runs the exporter-side gate shared by Export and Status.
+func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, requester string) (exportAuth, error) {
 	peerAddr, err := s.peerID(ctx)
 	if err != nil {
-		return VolumeInfo{}, "", status.Error(codes.Unauthenticated, err.Error())
+		return exportAuth{}, status.Error(codes.Unauthenticated, err.Error())
 	}
 
 	req := &vtv1.ExportRequest{Owner: owner, Vid: vid, DSeq: dseq, Requester: requester}
 
-	leases, err := authorizeExport(ctx, s.chain, req, peerAddr, s.self)
+	grant, err := authorizeExport(ctx, s.chain, req, peerAddr, s.self)
 	if err != nil {
 		if errors.Is(err, ErrNotAuthorized) {
-			return VolumeInfo{}, "", status.Error(codes.PermissionDenied, err.Error())
+			return exportAuth{}, status.Error(codes.PermissionDenied, err.Error())
 		}
 
-		return VolumeInfo{}, "", status.Error(codes.Unavailable, err.Error())
+		return exportAuth{}, status.Error(codes.Unavailable, err.Error())
 	}
 
 	info, err := s.vols.Resolve(ctx, owner, vid)
 	if err != nil {
-		return VolumeInfo{}, "", status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s: %s", owner, vid, err.Error()))
+		return exportAuth{}, status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s: %s", owner, vid, err.Error()))
 	}
 
 	if info.DSeq != dseq {
-		return VolumeInfo{}, "", status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s is not deployment %d here", owner, vid, dseq))
+		return exportAuth{}, status.Error(codes.NotFound, fmt.Sprintf("volume %s/%s is not deployment %d here", owner, vid, dseq))
 	}
 
 	if info.Incomplete {
-		return VolumeInfo{}, "", importIncompleteError(owner, vid)
+		return exportAuth{}, importIncompleteError(owner, vid)
 	}
 
 	if !info.Exportable {
-		return VolumeInfo{}, "", status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not exportable", owner, vid))
+		return exportAuth{}, status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not exportable", owner, vid))
 	}
 
-	own, held := latestLease(leases, vid, dseq, s.self)
-	if !info.Quiesced || !held || own.State != mv1.LeaseClosed {
-		return info, "", nil
+	auth := exportAuth{info: info, replica: grant.replica}
+
+	own, held := latestLease(grant.leases, vid, dseq, s.self)
+	if held {
+		auth.maxReplicas = own.Policy.MaxReplicas
 	}
 
-	return info, fmt.Sprintf("%s@%d", info.Ref.Name, own.OSeq), nil
+	if info.Quiesced && held && own.State == mv1.LeaseClosed {
+		auth.finalKey = fmt.Sprintf("%s@%d", info.Ref.Name, own.OSeq)
+	}
+
+	return auth, nil
 }
 
 // Export streams the volume image at the latest held snapshot: full when
@@ -259,16 +298,18 @@ func (s *Server) authorize(ctx context.Context, owner, vid string, dseq uint64, 
 func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_ExportServer) error {
 	ctx := stream.Context()
 
-	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	auth, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return err
 	}
+
+	info := auth.info
 
 	if info.Bucket {
 		return bucketImageError(req.Owner, req.Vid)
 	}
 
-	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)
+	snap, err := s.exportSnapshot(ctx, info.Ref, auth.finalKey)
 	if err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
@@ -305,16 +346,18 @@ func (s *Server) Export(req *vtv1.ExportRequest, stream vtv1.VolumeTransfer_Expo
 func (s *Server) ExportObjects(req *vtv1.ExportObjectsRequest, stream vtv1.VolumeTransfer_ExportObjectsServer) error {
 	ctx := stream.Context()
 
-	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	auth, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return err
 	}
+
+	info := auth.info
 
 	if !info.Bucket || s.buckets == nil {
 		return status.Error(codes.FailedPrecondition, fmt.Sprintf("volume %s/%s is not a bucket served here", req.Owner, req.Vid))
 	}
 
-	if finalKey == "" {
+	if auth.finalKey == "" {
 		return notFinalError(req.Owner, req.Vid)
 	}
 
@@ -365,6 +408,51 @@ func (s *Server) exportSnapshot(ctx context.Context, ref Ref, finalKey string) (
 	return s.driver.Snapshot(ctx, ref)
 }
 
+// replicaSnapshot picks the snapshot a replica syncs to: a fresh one, so its
+// copy follows the volume, unless one was taken in the last replicaEvery,
+// which a replica asking that soon gets instead. Taking one prunes the
+// oldest down to keep, enough that each replica's diff base is likely still
+// held at its next round; one whose base went falls back to a full copy.
+func (s *Server) replicaSnapshot(ctx context.Context, ref Ref, keep int) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snaps, err := s.driver.Snapshots(ctx, ref)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	now := s.now()
+
+	if n := len(snaps); n > 0 {
+		latest := snaps[n-1]
+
+		if now.Sub(latest.CreatedAt) < s.replicaEvery || now.Sub(s.replicaTaken[ref.Name]) < s.replicaEvery {
+			return latest, nil
+		}
+	}
+
+	snap, err := s.driver.Snapshot(ctx, ref)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	s.replicaTaken[ref.Name] = now
+
+	if err := s.driver.Prune(ctx, ref, keep); err != nil {
+		s.log.Error("pruning volume snapshots", "volume", ref.Name, "err", err)
+	}
+
+	return snap, nil
+}
+
+// replicaSnapshotsKept is how many snapshots a volume with maxReplicas
+// replicas keeps: one per replica's diff base, the one being served, and
+// one more for a replica mid-transfer when the next is taken.
+func replicaSnapshotsKept(maxReplicas uint32) int {
+	return int(maxReplicas) + 2
+}
+
 // finalSnapshot takes the volume's final snapshot once and serves it from
 // then on. A restart takes another, which holds the same data.
 func (s *Server) finalSnapshot(ctx context.Context, ref Ref, key string) (Snapshot, error) {
@@ -399,17 +487,30 @@ func (s *Server) finalSnapshot(ctx context.Context, ref Ref, key string) (Snapsh
 // Status reports the snapshots held, the whole-image digest at the latest
 // one, the sync lag a destination syncing from it would carry, and whether
 // that snapshot is final.
+//
+// A replica asking is handed a fresh snapshot (replicaSnapshot): its next
+// export carries the volume as it is now, not as the first replica sync
+// found it.
 func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.StatusResponse, error) {
-	info, finalKey, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
+	auth, err := s.authorize(ctx, req.Owner, req.Vid, req.DSeq, req.Requester)
 	if err != nil {
 		return nil, err
 	}
+
+	info := auth.info
 
 	if info.Bucket {
 		return nil, bucketImageError(req.Owner, req.Vid)
 	}
 
-	snap, err := s.exportSnapshot(ctx, info.Ref, finalKey)
+	var snap Snapshot
+
+	if auth.replica && auth.finalKey == "" {
+		snap, err = s.replicaSnapshot(ctx, info.Ref, replicaSnapshotsKept(auth.maxReplicas))
+	} else {
+		snap, err = s.exportSnapshot(ctx, info.Ref, auth.finalKey)
+	}
+
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -429,7 +530,7 @@ func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.Sta
 		LatestSnapshot: snap.ID,
 		Size_:          digest.Size,
 		SHA256:         digest.SHA256,
-		Final:          finalKey != "",
+		Final:          auth.finalKey != "",
 	}
 
 	for _, sn := range snaps {
@@ -438,6 +539,11 @@ func (s *Server) Status(ctx context.Context, req *vtv1.StatusRequest) (*vtv1.Sta
 
 	if !snap.CreatedAt.IsZero() {
 		resp.SyncLagSeconds = int64(s.now().Sub(snap.CreatedAt).Seconds())
+	}
+
+	// a replica's data is as old as its last copy of its primary
+	if !info.SyncedAt.IsZero() {
+		resp.SyncLagSeconds = max(resp.SyncLagSeconds, int64(s.now().Sub(info.SyncedAt).Seconds()))
 	}
 
 	return resp, nil

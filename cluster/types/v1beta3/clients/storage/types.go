@@ -24,6 +24,15 @@ type VolumeState struct {
 	// ImportFrom is the provider a moved volume's data is still being
 	// copied from; empty once it all arrived.
 	ImportFrom string `json:"import-from,omitempty"`
+	// ReplicaOf names the primary a replica follows (owner/dseq/gseq/name).
+	ReplicaOf string `json:"replica-of,omitempty"`
+	// SyncedAt is when the data a replica holds was taken at its primary.
+	SyncedAt string `json:"synced-at,omitempty"`
+	// Syncing reports a replica whose copy of its primary is missing or
+	// being written: it is no whole volume.
+	Syncing bool `json:"syncing,omitempty"`
+	// Promoted reports a replica that no longer follows its primary.
+	Promoted bool `json:"promoted,omitempty"`
 }
 
 // Client is the daemon's interface to the storage operator. It satisfies

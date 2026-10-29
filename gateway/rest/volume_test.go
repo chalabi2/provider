@@ -84,3 +84,45 @@ func TestVolumeStatusRefusesAnotherOwnersVolume(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, code)
 	})
 }
+
+func TestVolumeStatusReportsHowFarBehindAReplicaIs(t *testing.T) {
+	synced := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+
+	runBucketTest(t, false, func(vol *crd.Volume) {
+		vol.Spec.Access = ""
+		vol.Spec.ReplicaOf = "akash1owner/7/1/primary-data"
+		vol.Status.Phase = crd.VolumePhaseProvisioned
+		at := metav1.NewTime(synced)
+		vol.Status.SyncedAt = &at
+	}, func(bt *bucketTest) {
+		code, body := bt.do(http.MethodGet, volumePath(bt.lid), "", ajwt.PermissionScopeStatus)
+		require.Equal(t, http.StatusOK, code, body)
+
+		var status VolumeStatus
+		require.NoError(t, json.Unmarshal([]byte(body), &status))
+		require.Equal(t, "akash1owner/7/1/primary-data", status.ReplicaOf)
+		require.True(t, synced.Equal(*status.SyncedAt))
+		require.NotNil(t, status.SyncLagSeconds)
+		require.InDelta(t, 3600, *status.SyncLagSeconds, 60)
+		require.False(t, status.Promoted)
+	})
+}
+
+func TestVolumeStatusReportsAPromotedReplica(t *testing.T) {
+	runBucketTest(t, false, func(vol *crd.Volume) {
+		vol.Spec.Access = ""
+		vol.Spec.ReplicaOf = "akash1owner/7/1/primary-data"
+		vol.Status.Phase = crd.VolumePhaseAttached
+		at := metav1.NewTime(time.Now().Add(-time.Hour))
+		vol.Status.SyncedAt = &at
+		vol.Status.Promoted = true
+	}, func(bt *bucketTest) {
+		code, body := bt.do(http.MethodGet, volumePath(bt.lid), "", ajwt.PermissionScopeStatus)
+		require.Equal(t, http.StatusOK, code, body)
+
+		var status VolumeStatus
+		require.NoError(t, json.Unmarshal([]byte(body), &status))
+		require.True(t, status.Promoted)
+		require.Nil(t, status.SyncLagSeconds, "a promoted replica follows nothing, so it lags nothing")
+	})
+}
