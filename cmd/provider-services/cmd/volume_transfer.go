@@ -28,7 +28,6 @@ import (
 	"github.com/akash-network/provider/bucket"
 	providerflags "github.com/akash-network/provider/cmd/provider-services/cmd/flags"
 	gwutils "github.com/akash-network/provider/gateway/utils"
-	"github.com/akash-network/provider/operator/inventory"
 	"github.com/akash-network/provider/operator/storage/replication"
 	"github.com/akash-network/provider/tools/fromctx"
 )
@@ -105,7 +104,7 @@ func buildVolumeTransfer(ctx context.Context, cl aclient.Client, certs gwutils.C
 
 	files := replication.NewFileDriver(baseDir)
 	driver := replication.NewAutoDriver(
-		replication.NewRBDDriver(inventory.NewRemotePodCommandExecutor(kubecfg, kc), locator, rookNS),
+		replication.NewRBDDriver(replication.NewPodExec(kubecfg, kc), locator, rookNS),
 		files,
 	)
 
