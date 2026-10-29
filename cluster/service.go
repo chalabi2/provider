@@ -83,8 +83,9 @@ type Cluster interface {
 	// allocated. The reservation itself is not changed.
 	CheckResize(mtypes.OrderID, dtypes.ResourceGroup) (dtypes.ResourceUnits, error)
 	// Resize swaps the reservation held for an order to resources once the
-	// chain has applied a lease resize.
-	Resize(mtypes.OrderID, dtypes.ResourceGroup) error
+	// chain has applied a lease resize, and reports whether the reservation
+	// changed: one that already holds those resources is left as it is.
+	Resize(mtypes.OrderID, dtypes.ResourceGroup) (bool, error)
 }
 
 // StatusClient is the interface which includes status of service
@@ -249,7 +250,7 @@ func (s *service) CheckResize(order mtypes.OrderID, resources dtypes.ResourceGro
 	return s.inventory.checkResize(order, resources)
 }
 
-func (s *service) Resize(order mtypes.OrderID, resources dtypes.ResourceGroup) error {
+func (s *service) Resize(order mtypes.OrderID, resources dtypes.ResourceGroup) (bool, error) {
 	return s.inventory.resize(order, resources)
 }
 

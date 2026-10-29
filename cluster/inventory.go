@@ -102,7 +102,9 @@ type resizeRequest struct {
 
 type inventoryResponse struct {
 	value ctypes.Reservation
-	err   error
+	// changed reports, for a resize, whether the reservation changed
+	changed bool
+	err     error
 }
 
 type inventoryService struct {
@@ -287,23 +289,24 @@ func (is *inventoryService) unreserve(order mtypes.OrderID) error { // nolint: u
 // allocated at the new size, or the error that keeps the size from fitting.
 // The reservation itself is left as it is.
 func (is *inventoryService) checkResize(order mtypes.OrderID, resources dtypes.ResourceGroup) (dtypes.ResourceUnits, error) {
-	res, err := is.resizeReservation(order, resources, true)
+	resp, err := is.resizeReservation(order, resources, true)
 	if err != nil {
 		return nil, err
 	}
 
-	return res.GetAllocatedResources(), nil
+	return resp.value.GetAllocatedResources(), nil
 }
 
-// resize swaps the reservation held for order to the new size.
-func (is *inventoryService) resize(order mtypes.OrderID, resources dtypes.ResourceGroup) error {
-	_, err := is.resizeReservation(order, resources, false)
-	return err
+// resize swaps the reservation held for order to the new size, and reports
+// whether the reservation changed.
+func (is *inventoryService) resize(order mtypes.OrderID, resources dtypes.ResourceGroup) (bool, error) {
+	resp, err := is.resizeReservation(order, resources, false)
+	return resp.changed, err
 }
 
-func (is *inventoryService) resizeReservation(order mtypes.OrderID, resources dtypes.ResourceGroup, dryRun bool) (ctypes.Reservation, error) {
+func (is *inventoryService) resizeReservation(order mtypes.OrderID, resources dtypes.ResourceGroup, dryRun bool) (inventoryResponse, error) {
 	if err := checkResourceUnits(resources); err != nil {
-		return nil, err
+		return inventoryResponse{}, err
 	}
 
 	ch := make(chan inventoryResponse, 1)
@@ -317,9 +320,9 @@ func (is *inventoryService) resizeReservation(order mtypes.OrderID, resources dt
 	select {
 	case is.resizech <- req:
 		response := <-ch
-		return response.value, response.err
+		return response, response.err
 	case <-is.lc.ShuttingDown():
-		return nil, ErrNotRunning
+		return inventoryResponse{}, ErrNotRunning
 	}
 }
 
@@ -774,7 +777,7 @@ func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServ
 
 		log.Info("durable reservation resized")
 		inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
-		req.ch <- inventoryResponse{}
+		req.ch <- inventoryResponse{changed: true}
 		return true
 	}
 
@@ -819,7 +822,7 @@ func (is *inventoryService) handleResize(req resizeRequest, state *inventoryServ
 
 	log.Info("reservation resized", "allocated", res.allocated)
 	inventoryRequestsCounter.WithLabelValues("resize", "applied").Inc()
-	req.ch <- inventoryResponse{}
+	req.ch <- inventoryResponse{changed: true}
 
 	return true
 }

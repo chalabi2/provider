@@ -105,6 +105,8 @@ func NewService(
 		resizes:    make(map[mtypes.LeaseID]*leaseResize),
 		resizesch:  make(chan []mvbeta.LeaseResize, 1),
 		relist:     resizesRelistPeriod,
+		leasesch:   make(chan []mtypes.LeaseID, 1),
+		resync:     reservationsResyncPeriod,
 	}
 
 	// register the fetchers before starting run: run waits for the group on exit, and a task
@@ -177,6 +179,11 @@ type service struct {
 	resizesch chan []mvbeta.LeaseResize
 	// relist is how often the pending lease resizes are listed.
 	relist time.Duration
+	// leasesch receives the provider's active leases, for their reservations
+	// to be resynced with their groups.
+	leasesch chan []mtypes.LeaseID
+	// resync is how often the active leases are listed.
+	resync time.Duration
 	// resizeWG tracks running resize evaluations.
 	resizeWG sync.WaitGroup
 }
@@ -357,22 +364,37 @@ func (s *service) run(ctx context.Context) {
 	defer rcancel()
 
 	// Applied resizes are swapped into the reservations one at a time, so two
-	// resizes of a lease land in the order the chain applied them.
+	// resizes of a lease land in the order the chain applied them. Those the
+	// chain announced go first; the leases a resync checks for resizes the
+	// provider missed follow, and the latest resync replaces the leases an
+	// earlier one left.
 	var (
-		applyQueue []mtypes.LeaseID
-		applych    <-chan runner.Result
+		applyQueue  []mtypes.LeaseID
+		resyncQueue []mtypes.LeaseID
+		applych     <-chan runner.Result
 	)
 
 	startApply := func() {
-		if applych != nil || len(applyQueue) == 0 {
+		if applych != nil {
 			return
 		}
 
-		lid := applyQueue[0]
-		applyQueue = applyQueue[1:]
+		var (
+			lid       mtypes.LeaseID
+			announced bool
+		)
+
+		switch {
+		case len(applyQueue) != 0:
+			lid, applyQueue, announced = applyQueue[0], applyQueue[1:], true
+		case len(resyncQueue) != 0:
+			lid, resyncQueue = resyncQueue[0], resyncQueue[1:]
+		default:
+			return
+		}
 
 		applych = runner.Do(func() runner.Result {
-			s.applyResize(rctx, lid)
+			s.applyResize(rctx, lid, announced)
 			return runner.NewResult(nil, nil)
 		})
 	}
@@ -406,6 +428,9 @@ loop:
 			s.processOrdersPage(page)
 		case page := <-s.resizesch:
 			s.processResizesPage(rctx, page)
+		case lids := <-s.leasesch:
+			resyncQueue = lids
+			startApply()
 		case ev := <-s.sub.Events():
 			switch ev := ev.(type) { // nolint: gocritic
 			case *mtypes.EventOrderCreated:

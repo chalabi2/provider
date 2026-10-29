@@ -1,6 +1,7 @@
 package bidengine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	tpubsub "github.com/troian/pubsub"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkquery "github.com/cosmos/cosmos-sdk/types/query"
 
 	clientmocks "pkg.akt.dev/go/mocks/node/client"
 	deploymentmocks "pkg.akt.dev/go/mocks/node/client/deployment"
@@ -366,6 +368,8 @@ type resizeServiceScaffold struct {
 	bus        pubsub.Bus
 	svc        *service
 	broadcasts chan []sdk.Msg
+	// active is the provider's active leases on chain
+	active []mtypes.LeaseID
 }
 
 func newResizeServiceScaffold(t *testing.T) *resizeServiceScaffold {
@@ -404,6 +408,15 @@ func (s *resizeServiceScaffold) start(t *testing.T, catchUp, pending []mvbeta.Le
 		return req.Owner != ""
 	})).Return(&mvbeta.QueryLeaseResizesResponse{LeaseResizes: pending}, nil)
 
+	leases := &mvbeta.QueryLeasesResponse{}
+	for _, lid := range s.active {
+		leases.Leases = append(leases.Leases, mvbeta.QueryLeaseResponse{Lease: mtypes.Lease{ID: lid, State: mtypes.LeaseActive}})
+	}
+
+	market.On("Leases", mock.Anything, mock.MatchedBy(func(req *mvbeta.QueryLeasesRequest) bool {
+		return req.Filters.Provider == s.provider.String() && req.Filters.State == mtypes.LeaseActive.String()
+	})).Return(leases, nil)
+
 	providers := &providermocks.QueryClient{}
 	providers.On("Provider", mock.Anything, mock.Anything).Return(&ptypes.QueryProviderResponse{}, nil)
 
@@ -421,7 +434,9 @@ func (s *resizeServiceScaffold) start(t *testing.T, catchUp, pending []mvbeta.Le
 	client.On("Query").Return(query)
 	client.On("Tx").Return(tx)
 
-	s.bus = pubsub.NewBus()
+	if s.bus == nil {
+		s.bus = pubsub.NewBus()
+	}
 
 	ctx := context.WithValue(context.Background(), fromctx.CtxKeyPubSub, tpubsub.New(context.Background(), 1000))
 
@@ -583,6 +598,7 @@ func Test_LeaseResizesRelisted(t *testing.T) {
 	market.On("LeaseResizes", mock.Anything, mock.MatchedBy(func(r *mvbeta.QueryLeaseResizesRequest) bool {
 		return r.Provider == provider.String() && r.Owner == ""
 	})).Return(&mvbeta.QueryLeaseResizesResponse{LeaseResizes: []mvbeta.LeaseResize{req}}, nil)
+	market.On("Leases", mock.Anything, mock.Anything).Return(&mvbeta.QueryLeasesResponse{}, nil)
 
 	aqc := &clientmocks.QueryClient{}
 	aqc.On("Market").Return(market)
@@ -591,6 +607,8 @@ func Test_LeaseResizesRelisted(t *testing.T) {
 		session:   session.New(testutil.Logger(t), nil, &ptypes.Provider{Owner: provider.String()}, 0),
 		resizesch: make(chan []mvbeta.LeaseResize),
 		relist:    10 * time.Millisecond,
+		leasesch:  make(chan []mtypes.LeaseID, 1),
+		resync:    time.Hour,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -608,6 +626,122 @@ func Test_LeaseResizesRelisted(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, testutil.ChannelWaitForValue(t, errch).(error), context.Canceled)
+}
+
+func Test_ActiveLeasesRelistedForResync(t *testing.T) {
+	provider := testutil.AccAddress(t)
+	lidA := mtypes.MakeLeaseID(mtypes.MakeBidID(testOrderID(t, 1), provider))
+	lidB := mtypes.MakeLeaseID(mtypes.MakeBidID(testOrderID(t, 2), provider))
+
+	page := func(lid mtypes.LeaseID, next []byte) *mvbeta.QueryLeasesResponse {
+		return &mvbeta.QueryLeasesResponse{
+			Leases:     []mvbeta.QueryLeaseResponse{{Lease: mtypes.Lease{ID: lid, State: mtypes.LeaseActive}}},
+			Pagination: &sdkquery.PageResponse{NextKey: next},
+		}
+	}
+
+	leasesPage := func(key []byte) interface{} {
+		return mock.MatchedBy(func(r *mvbeta.QueryLeasesRequest) bool {
+			return r.Filters.Provider == provider.String() && r.Filters.State == mtypes.LeaseActive.String() &&
+				r.Pagination != nil && bytes.Equal(r.Pagination.Key, key)
+		})
+	}
+
+	market := &marketmocks.QueryClient{}
+	market.On("LeaseResizes", mock.Anything, mock.Anything).Return(&mvbeta.QueryLeaseResizesResponse{}, nil)
+	market.On("Leases", mock.Anything, leasesPage(nil)).Return(page(lidA, []byte("b")), nil)
+	market.On("Leases", mock.Anything, leasesPage([]byte("b"))).Return(page(lidB, nil), nil)
+
+	aqc := &clientmocks.QueryClient{}
+	aqc.On("Market").Return(market)
+
+	svc := &service{
+		session:   session.New(testutil.Logger(t), nil, &ptypes.Provider{Owner: provider.String()}, 0),
+		resizesch: make(chan []mvbeta.LeaseResize, 1),
+		relist:    time.Hour,
+		leasesch:  make(chan []mtypes.LeaseID),
+		resync:    10 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errch := make(chan error, 1)
+	go func() {
+		errch <- svc.resizesFetcher(ctx, aqc)
+	}()
+
+	// every page, at startup and then periodically
+	for i := 0; i < 3; i++ {
+		lids := testutil.ChannelWaitForValue(t, svc.leasesch).([]mtypes.LeaseID)
+		require.Equal(t, []mtypes.LeaseID{lidA, lidB}, lids)
+	}
+
+	cancel()
+	require.ErrorIs(t, testutil.ChannelWaitForValue(t, errch).(error), context.Canceled)
+}
+
+func Test_LeaseResizedWhileAwayResyncedAtStartup(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	lid := s.lease(1)
+	s.active = []mtypes.LeaseID{lid}
+
+	// the chain applied the resize while the provider was down
+	s.group.GroupSpec.Resources = withResizedMemory(s.group.GroupSpec.Resources)
+
+	swapped := make(chan *dvbeta.Group, 1)
+	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Run(func(args mock.Arguments) {
+		swapped <- args.Get(1).(*dvbeta.Group)
+	}).Return(true, nil)
+
+	s.start(t, nil, nil)
+
+	group := testutil.ChannelWaitForValue(t, swapped).(*dvbeta.Group)
+	require.Equal(t, s.group.ID, group.ID)
+	require.Equal(t, uint64(resizedMemory), group.GroupSpec.Resources[0].Memory.Quantity.Value())
+}
+
+func Test_ResyncHandsGrownVolumeToProvisioner(t *testing.T) {
+	s := newResizeServiceScaffold(t)
+	s.group = *volumeGroupForTest(t, volumeGroupSpec())
+	s.group.GroupSpec.Resources = withVolumeSize(s.group.GroupSpec.Resources, 25*unit.Gi)
+
+	// in step with its group, without a reservation, grown while unseen
+	inStep, unreserved, grown := s.lease(1), s.lease(2), s.lease(3)
+	s.active = []mtypes.LeaseID{inStep, unreserved, grown}
+
+	s.cluster.On("Resize", inStep.OrderID(), mock.Anything).Return(false, nil)
+	s.cluster.On("Resize", unreserved.OrderID(), mock.Anything).Return(false, cluster.ErrReservationNotFound)
+	s.cluster.On("Resize", grown.OrderID(), mock.Anything).Return(true, nil)
+
+	s.bus = pubsub.NewBus()
+
+	sub, err := s.bus.Subscribe()
+	require.NoError(t, err)
+	defer sub.Close()
+
+	s.start(t, nil, nil)
+
+	// the leases are resynced in order, so a volume handed over for either
+	// of the first two would come first
+	for {
+		select {
+		case ev := <-sub.Events():
+			resized, ok := ev.(event.VolumeLeaseResized)
+			if !ok {
+				continue
+			}
+
+			require.Equal(t, grown, resized.LeaseID)
+			require.Equal(t, uint64(25*unit.Gi), resized.Group.GroupSpec.Resources[0].Storage[0].Quantity.Value())
+
+			s.cluster.AssertCalled(t, "Resize", inStep.OrderID(), mock.Anything)
+			s.cluster.AssertCalled(t, "Resize", unreserved.OrderID(), mock.Anything)
+
+			return
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for VolumeLeaseResized")
+		}
+	}
 }
 
 func Test_LeaseResizeCanceledWhileEvaluating(t *testing.T) {
@@ -661,7 +795,7 @@ func Test_LeaseResizedSwapsReservation(t *testing.T) {
 	swapped := make(chan *dvbeta.Group, 1)
 	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Run(func(args mock.Arguments) {
 		swapped <- args.Get(1).(*dvbeta.Group)
-	}).Return(nil)
+	}).Return(true, nil)
 
 	s.start(t, nil, nil)
 
@@ -684,7 +818,9 @@ func Test_LeaseResizedHandsVolumeToProvisioner(t *testing.T) {
 	s.group.GroupSpec.Resources = withVolumeSize(s.group.GroupSpec.Resources, 25*unit.Gi)
 	lid := s.lease(1)
 
-	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Return(nil)
+	// the chain announced it: the volume is handed over even with the
+	// reservation already in step
+	s.cluster.On("Resize", lid.OrderID(), mock.Anything).Return(false, nil)
 	s.start(t, nil, nil)
 
 	sub, err := s.bus.Subscribe()

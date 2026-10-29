@@ -175,20 +175,29 @@ func (_c *Cluster_Reserve_Call) RunAndReturn(run func(orderID v1.OrderID, resour
 }
 
 // Resize provides a mock function for the type Cluster
-func (_mock *Cluster) Resize(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) error {
+func (_mock *Cluster) Resize(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (bool, error) {
 	ret := _mock.Called(orderID, resourceGroup)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Resize")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) (bool, error)); ok {
+		return returnFunc(orderID, resourceGroup)
+	}
+	if returnFunc, ok := ret.Get(0).(func(v1.OrderID, v1beta4.ResourceGroup) bool); ok {
 		r0 = returnFunc(orderID, resourceGroup)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(bool)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(v1.OrderID, v1beta4.ResourceGroup) error); ok {
+		r1 = returnFunc(orderID, resourceGroup)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // Cluster_Resize_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Resize'
@@ -221,12 +230,12 @@ func (_c *Cluster_Resize_Call) Run(run func(orderID v1.OrderID, resourceGroup v1
 	return _c
 }
 
-func (_c *Cluster_Resize_Call) Return(err error) *Cluster_Resize_Call {
-	_c.Call.Return(err)
+func (_c *Cluster_Resize_Call) Return(b bool, err error) *Cluster_Resize_Call {
+	_c.Call.Return(b, err)
 	return _c
 }
 
-func (_c *Cluster_Resize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) error) *Cluster_Resize_Call {
+func (_c *Cluster_Resize_Call) RunAndReturn(run func(orderID v1.OrderID, resourceGroup v1beta4.ResourceGroup) (bool, error)) *Cluster_Resize_Call {
 	_c.Call.Return(run)
 	return _c
 }

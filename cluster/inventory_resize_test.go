@@ -235,6 +235,31 @@ func TestSameResources(t *testing.T) {
 	}
 }
 
+// A reservation rebuilt at startup describes the manifest deployed before
+// the restart. When the chain resized the lease while the provider was down,
+// or while it missed the event, that manifest has the old size.
+func TestInventory_ResizeOfAReservationRebuiltAtTheOldSize(t *testing.T) {
+	lid := testutil.LeaseID(t)
+	group := resizeGroupForTest(1000, 0, 1)
+	resized := resizeGroupForTest(2000, 0, 1)
+
+	h := newResizeHandlersForTest(t, inventoryConfigForTest())
+
+	res := newReservation(lid.OrderID(), manifestGroupForTest(group))
+	h.state.reservations = append(h.state.reservations, res)
+	h.report(res, lid, group, event.ClusterDeploymentDeployed)
+
+	require.True(t, h.resize(t, lid, resized))
+	require.Equal(t, uint64(2000), res.Resources().GetResourceUnits()[0].CPU.Units.Value())
+	require.False(t, res.Allocated())
+	require.True(t, res.awaitingManifest)
+
+	// a later resync finds it in step and leaves its wait alone
+	require.False(t, h.resize(t, lid, resized))
+	require.False(t, res.Allocated())
+	require.True(t, res.awaitingManifest)
+}
+
 func TestInventory_ResizeWaitsForTheManifestAtTheNewSize(t *testing.T) {
 	lid := testutil.LeaseID(t)
 	group := resizeGroupForTest(1000, 0, 1)
@@ -373,7 +398,8 @@ func TestInventory_ResizeWaitForTheManifestTimesOut(t *testing.T) {
 	require.NoError(t, bus.Publish(deploymentReport(lid, group, event.ClusterDeploymentDeployed)))
 	waitForActiveReservations(t, inv, 1)
 
-	require.NoError(t, inv.resize(lid.OrderID(), resizeGroupForTest(2000, 0, 1)))
+	_, err = inv.resize(lid.OrderID(), resizeGroupForTest(2000, 0, 1))
+	require.NoError(t, err)
 
 	status, err := inv.status(context.Background())
 	require.NoError(t, err)
@@ -440,7 +466,9 @@ func TestInventory_ResizeSwapsLeaseReservation(t *testing.T) {
 	waitForActiveReservations(t, inv, 1)
 	require.Equal(t, uint(999), inv.availableExternalPorts)
 
-	require.NoError(t, inv.resize(lid.OrderID(), resized))
+	changed, err := inv.resize(lid.OrderID(), resized)
+	require.NoError(t, err)
+	require.True(t, changed)
 
 	res, err := inv.lookup(lid.OrderID(), group)
 	require.NoError(t, err)
@@ -456,7 +484,13 @@ func TestInventory_ResizeSwapsLeaseReservation(t *testing.T) {
 	waitForActiveReservations(t, inv, 1)
 	require.Equal(t, uint(999), inv.availableExternalPorts)
 
-	require.ErrorIs(t, inv.resize(testutil.LeaseID(t).OrderID(), group), ErrReservationNotFound)
+	// a reservation already in step with the group is left as it is
+	changed, err = inv.resize(lid.OrderID(), resized)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	_, err = inv.resize(testutil.LeaseID(t).OrderID(), group)
+	require.ErrorIs(t, err, ErrReservationNotFound)
 }
 
 // interconnectInventory stamps one interconnect unit per GPU into the
@@ -583,7 +617,13 @@ func TestInventory_ResizeDurableReservation(t *testing.T) {
 	_, err = inv.checkResize(lid.OrderID(), makeVolumeGroupForTest(12*unit.Gi))
 	require.ErrorIs(t, err, ctypes.ErrInsufficientCapacity)
 
-	require.NoError(t, inv.resize(lid.OrderID(), makeVolumeGroupForTest(11*unit.Gi)))
+	changed, err := inv.resize(lid.OrderID(), makeVolumeGroupForTest(11*unit.Gi))
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = inv.resize(lid.OrderID(), makeVolumeGroupForTest(11*unit.Gi))
+	require.NoError(t, err)
+	require.False(t, changed)
 
 	res, err := inv.lookup(lid.OrderID(), makeVolumeGroupForTest(11*unit.Gi))
 	require.NoError(t, err)

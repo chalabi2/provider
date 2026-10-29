@@ -31,7 +31,7 @@ import (
 const (
 	// resizeApplyAttempts bounds the group reads of an applied resize. If
 	// they all fail the reservation keeps the old size, and the inventory
-	// under-counts the tenant's resized pods until the provider restarts.
+	// under-counts the tenant's resized pods until the next resync.
 	resizeApplyAttempts = 5
 
 	// resizesRelistPeriod is how often the provider lists the pending lease
@@ -39,6 +39,14 @@ const (
 	// missed is answered by the next listing, long before it expires
 	// (lease_resize_ttl defaults to 10m).
 	resizesRelistPeriod = time.Minute
+
+	// reservationsResyncPeriod is how often the provider compares the group
+	// of each of its active leases with the reservation it holds for the
+	// lease, after the comparison at startup. A resize applied while the
+	// provider was down, or whose EventLeaseResized it missed, left the
+	// reservation at the old size. Each comparison reads a group from chain,
+	// so it runs less often than the listing of pending resizes.
+	reservationsResyncPeriod = 5 * time.Minute
 )
 
 var leaseResizeCounter = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -46,9 +54,14 @@ var leaseResizeCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Lease resize requests answered, by answer",
 }, []string{"result"})
 
-// errResizesNextKeyRepeated is returned when a page of pending lease resizes
-// names the key it was requested with as the key of the following page.
-var errResizesNextKeyRepeated = errors.New("lease resizes pagination: next key repeats the requested key")
+var (
+	// errResizesNextKeyRepeated is returned when a page of pending lease
+	// resizes names the key it was requested with as the key of the
+	// following page.
+	errResizesNextKeyRepeated = errors.New("lease resizes pagination: next key repeats the requested key")
+	// errLeasesNextKeyRepeated is the same for a page of active leases.
+	errLeasesNextKeyRepeated = errors.New("leases pagination: next key repeats the requested key")
+)
 
 // leaseResize evaluates one pending lease resize request and answers it on
 // chain. It is kept apart from order on purpose: an order monitor's exit
@@ -358,25 +371,39 @@ func walkLeaseResizes(ctx context.Context, qc mvbeta.QueryClient, req mvbeta.Que
 	}
 }
 
-// resizesFetcher lists the pending lease resizes addressed to this provider
-// and queues them for run: at startup, to catch up on requests made while
-// the provider was down, and every relist period after, to answer a request
-// whose EventLeaseResizeRequested it missed while running. A listing that
+// resizesFetcher lists what run needs to keep the provider in step with the
+// lease resizes on chain, in case it missed their events. The pending
+// resizes addressed to the provider are listed at startup, to catch up on
+// requests made while it was down, and every relist period after, to answer
+// a request whose EventLeaseResizeRequested it missed while running. Its
+// active leases are listed at startup and every resync period after, for run
+// to bring each lease's reservation in line with its group. A listing that
 // fails is retried after ordersFetchRetryPeriod.
 func (s *service) resizesFetcher(ctx context.Context, aqc aclient.QueryClient) error {
-	listing := time.NewTimer(0)
-	defer listing.Stop()
+	resizes := time.NewTimer(0)
+	defer resizes.Stop()
+
+	leases := time.NewTimer(0)
+	defer leases.Stop()
 
 	for {
+		var (
+			list func(context.Context, aclient.QueryClient) error
+			next *time.Timer
+			wait time.Duration
+			what string
+		)
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-listing.C:
+		case <-resizes.C:
+			list, next, wait, what = s.listResizes, resizes, s.relist, "pending lease resizes"
+		case <-leases.C:
+			list, next, wait, what = s.listLeases, leases, s.resync, "active leases"
 		}
 
-		wait := s.relist
-
-		err := s.listResizes(ctx, aqc)
+		err := list(ctx, aqc)
 
 		// check the context rather than the error: gRPC reports cancellation as
 		// a status error which does not match context.Canceled
@@ -385,15 +412,66 @@ func (s *service) resizesFetcher(ctx context.Context, aqc aclient.QueryClient) e
 		}
 
 		if err != nil {
-			s.session.Log().Error("querying pending lease resizes", "err", err)
+			s.session.Log().Error("querying "+what, "err", err)
 
 			// a node repeating its page key would repeat it right away too
-			if !errors.Is(err, errResizesNextKeyRepeated) {
+			if !errors.Is(err, errResizesNextKeyRepeated) && !errors.Is(err, errLeasesNextKeyRepeated) {
 				wait = ordersFetchRetryPeriod
 			}
 		}
 
-		listing.Reset(wait)
+		next.Reset(wait)
+	}
+}
+
+// listLeases hands run the IDs of the provider's active leases.
+func (s *service) listLeases(ctx context.Context, aqc aclient.QueryClient) error {
+	req := mvbeta.QueryLeasesRequest{
+		Filters: mtypes.LeaseFilters{
+			Provider: s.session.Provider().Owner,
+			State:    mtypes.LeaseActive.String(),
+		},
+	}
+
+	var (
+		lids []mtypes.LeaseID
+		key  []byte
+	)
+
+	for {
+		req.Pagination = &sdkquery.PageRequest{Key: key}
+
+		resp, err := aqc.Market().Leases(ctx, &req)
+		if err != nil {
+			return err
+		}
+
+		for _, lease := range resp.Leases {
+			lids = append(lids, lease.Lease.ID)
+		}
+
+		var next []byte
+		if resp.Pagination != nil {
+			next = resp.Pagination.NextKey
+		}
+
+		if len(next) == 0 {
+			break
+		}
+
+		// a page naming the requested key as the next one would be fetched forever
+		if bytes.Equal(next, key) {
+			return fmt.Errorf("%w: %x", errLeasesNextKeyRepeated, next)
+		}
+
+		key = next
+	}
+
+	select {
+	case s.leasesch <- lids:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -492,13 +570,24 @@ func (s *service) pruneResizes() {
 	}
 }
 
-// applyResize brings the provider's records in line with a resize the chain
-// has applied: the reservation takes the resized group, and a volume lease
-// hands its new size to the volume provisioner. The group is read back from
+// applyResize brings the provider's records in line with a lease's group on
+// chain: the reservation takes the group's resources, and a volume lease
+// hands its size to the volume provisioner. The group is read back from
 // chain rather than taken from an evaluation, so a resize this run did not
 // evaluate, such as an operator's manual accept, is applied the same way.
-func (s *service) applyResize(ctx context.Context, lid mtypes.LeaseID) {
+//
+// announced is set when the chain announced the resize with
+// EventLeaseResized; the volume is then always handed over. Otherwise a
+// resync is checking the lease for a resize the provider missed: a lease
+// whose reservation already holds its group is left alone, and the group is
+// read once, the next resync reading it again.
+func (s *service) applyResize(ctx context.Context, lid mtypes.LeaseID, announced bool) {
 	log := s.session.Log().With("lid", lid)
+
+	attempts := uint(1)
+	if announced {
+		attempts = resizeApplyAttempts
+	}
 
 	var group dtypes.Group
 
@@ -513,7 +602,7 @@ func (s *service) applyResize(ctx context.Context, lid mtypes.LeaseID) {
 		return nil
 	},
 		retry.Context(ctx),
-		retry.Attempts(resizeApplyAttempts),
+		retry.Attempts(attempts),
 		retry.Delay(time.Second),
 		retry.DelayType(retry.BackOffDelay),
 		retry.LastErrorOnly(true))
@@ -525,11 +614,21 @@ func (s *service) applyResize(ctx context.Context, lid mtypes.LeaseID) {
 		return
 	}
 
-	if err := s.cluster.Resize(lid.OrderID(), &group); err != nil {
+	changed, err := s.cluster.Resize(lid.OrderID(), &group)
+
+	switch {
+	case err == nil:
+		if changed && !announced {
+			log.Info("reservation resynced with a lease resize missed earlier")
+		}
+	case !announced && errors.Is(err, cluster.ErrReservationNotFound):
+		// a lease won before a restart whose manifest never came holds none
+		log.Debug("no reservation to resync")
+	default:
 		log.Error("resizing reservation", "err", err)
 	}
 
-	if group.GroupSpec.Volume == nil {
+	if group.GroupSpec.Volume == nil || (!announced && !changed) {
 		return
 	}
 
